@@ -443,7 +443,7 @@ def _get_config():
         "gpu_host": gpu_host, "summary_descs": summary_descs,
         "recommended_models": recommended_models,
         "default_engine": "llm" if llm_host else "nllb",
-        "last": last, "version": "2.16.6",
+        "last": last, "version": "2.16.7",
         "has_read_pw": bool(_webui_passwords["read"]),
         "has_admin_pw": bool(_webui_passwords["admin"]),
     }
@@ -796,6 +796,8 @@ async def api_test_llm(body: dict = {}):
     import urllib.request
     import urllib.error
     # 嘗試 Ollama /api/tags 和 OpenAI /v1/models
+    # 注意：必須驗證回傳結構，不能只看 HTTP 200。LM Studio 對未實作的
+    # endpoint 一律回 200，若只看狀態碼會把 LM Studio 誤判成 Ollama。
     for path in ["/api/tags", "/v1/models"]:
         url = f"http://{host}{path}"
         try:
@@ -803,14 +805,20 @@ async def api_test_llm(body: dict = {}):
             req.add_header("Accept", "application/json")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode())
-                models = []
-                if "models" in data:
-                    # Ollama format
+                if not isinstance(data, dict):
+                    continue
+                if "/api/" in path:
+                    # Ollama format：須有 models 陣列
+                    if not isinstance(data.get("models"), list):
+                        continue
                     models = [m.get("name", "") for m in data["models"] if m.get("name")]
-                elif "data" in data:
-                    # OpenAI format
+                    server_type = "ollama"
+                else:
+                    # OpenAI format：須有 data 陣列
+                    if not isinstance(data.get("data"), list):
+                        continue
                     models = [m.get("id", "") for m in data["data"] if m.get("id")]
-                server_type = "ollama" if "/api/" in path else "openai"
+                    server_type = "openai"
                 return JSONResponse({"ok": True, "server_type": server_type,
                                      "models": models[:20], "url": url})
         except Exception:

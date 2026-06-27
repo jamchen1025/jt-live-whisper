@@ -1,5 +1,17 @@
 # Changelog
 
+### v2.16.7 (2026-06-27)
+
+**修正 — LM Studio 被誤判成 Ollama 導致翻譯全程失敗**
+- 使用者回報：將翻譯引擎設為 LM Studio（OpenAI 相容、預設 port 1234）後無法成功使用，終端噴 `[錯誤] 無法連接 Ollama: 'response'`、主程式 exit code 1、翻譯 0 筆
+- 根因：LM Studio 對**未實作的 endpoint 一律回 HTTP 200**（其 Developer Logs 會印 `Unexpected endpoint or method. Returning 200 anyway`）。而 `_detect_llm_server()` 偵測伺服器類型時，先打 Ollama 的 `/api/tags` 且**只看有沒有 200、未驗證回傳內容** → LM Studio 回了 200（非 Ollama 格式的空 body）就被誤判成 Ollama → 之後改走 Ollama 的 `POST /api/generate`，LM Studio 同樣回空的 200、沒有 `response` 欄位 → `_llm_generate()` 取 `result["response"]` 丟出 `KeyError: 'response'`
+- 影響範圍：只要 LM Studio 在 OpenAI 模式執行，自動偵測**永遠**會誤判成 Ollama 而失敗，使用者端無法靠改設定繞過
+- 修法：偵測時**驗證回傳結構**，不再只看 HTTP 200
+  - `/api/tags` 回傳須為 `{"models": [...]}` 結構才採信為 Ollama
+  - 否則往下試 `/v1/models`，須為 `{"data": [...]}` 結構才採信為 OpenAI 相容（LM Studio 走這條，至此正確辨識）
+- `webui.py` 的 `/api/test-llm`（WebUI「測試 LLM 伺服器連線」）有同樣的誤判隱患，一併比照修正
+- 對 Ollama / vLLM / llama.cpp 等原本就回正確結構的伺服器無任何行為改變
+
 ### v2.16.6 (2026-06-09)
 
 **修正 — RTX 50 系列（Blackwell）本機辨識全程失敗**

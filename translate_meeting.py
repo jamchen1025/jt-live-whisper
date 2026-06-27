@@ -798,7 +798,7 @@ ASR_ENGINES = [
     ("moonshine", "Moonshine", "真串流，低延遲，僅英文"),
 ]
 
-APP_VERSION = "2.16.6"
+APP_VERSION = "2.16.7"
 
 # faster-whisper 離線辨識參數（含長音檔幻覺防護）— 標準模式
 # - condition_on_previous_text=False：切斷上一段 prompt 傳染，避免一個短句卡住後幻覺自我強化
@@ -2506,21 +2506,29 @@ class NllbTranslator:
 
 
 def _detect_llm_server(host, port):
-    """自動偵測 LLM 伺服器類型，回傳 "ollama" / "openai" / None"""
-    # 先嘗試 Ollama
+    """自動偵測 LLM 伺服器類型，回傳 "ollama" / "openai" / None
+
+    注意：不能只看 HTTP 200。LM Studio 對未實作的 endpoint 一律回 200
+    （Developer Logs 會印 "Unexpected endpoint... Returning 200 anyway"），
+    若只看狀態碼會把 LM Studio 的 /api/tags 誤判成 Ollama，之後改走 Ollama
+    的 /api/generate 取不到 response 欄位而失敗。因此必須驗證回傳結構。
+    """
+    # 先嘗試 Ollama：回傳須為 {"models": [...]} 結構
     try:
         req = urllib.request.Request(f"http://{host}:{port}/api/tags")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            resp.read()
-            return "ollama"
+            data = json.loads(resp.read())
+            if isinstance(data, dict) and isinstance(data.get("models"), list):
+                return "ollama"
     except Exception:
         pass
-    # 再嘗試 OpenAI 相容
+    # 再嘗試 OpenAI 相容：回傳須為 {"data": [...]} 結構（LM Studio 走這條）
     try:
         req = urllib.request.Request(f"http://{host}:{port}/v1/models")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            resp.read()
-            return "openai"
+            data = json.loads(resp.read())
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                return "openai"
     except Exception:
         pass
     return None
