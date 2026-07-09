@@ -798,7 +798,7 @@ ASR_ENGINES = [
     ("moonshine", "Moonshine", "真串流，低延遲，僅英文"),
 ]
 
-APP_VERSION = "2.16.7"
+APP_VERSION = "2.16.8"
 
 # faster-whisper 離線辨識參數（含長音檔幻覺防護）— 標準模式
 # - condition_on_previous_text=False：切斷上一段 prompt 傳染，避免一個短句卡住後幻覺自我強化
@@ -2608,19 +2608,29 @@ def _llm_generate(prompt, model, host, port, server_type, stream=False,
             "prompt": prompt,
             "stream": stream,
         }
-        # Ollama：透過 options.think 控制思考模式
+        # Ollama：think 必須放頂層，放進 options 會被當成未知欄位忽略
         if think is not None:
-            payload["options"] = payload.get("options", {})
-            payload["options"]["think"] = think
+            payload["think"] = think
 
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data,
-        headers={"Content-Type": "application/json"},
-    )
+    def _send():
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        return urllib.request.urlopen(req, timeout=timeout)
+
+    def _open():
+        try:
+            return _send()
+        except urllib.error.HTTPError as e:
+            # 模型不支援思考模式時 Ollama 回 400，移除 think 欄位重送
+            if e.code != 400 or payload.pop("think", None) is None:
+                raise
+        return _send()
 
     if not stream:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open() as resp:
             result = json.loads(resp.read())
             if server_type == "openai":
                 return result["choices"][0]["message"]["content"].strip()
@@ -2631,7 +2641,7 @@ def _llm_generate(prompt, model, host, port, server_type, stream=False,
     response_text = ""
     token_count = 0
     line_buf = ""  # live_output 行緩衝（用於 markdown 著色）
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with _open() as resp:
         if server_type == "openai":
             # SSE 格式：data: {...}\n\n
             for raw_line in resp:
@@ -9029,8 +9039,10 @@ class _SummaryStatusBar:
 
 
 def call_ollama_raw(prompt, model, host, port, timeout=300, spinner=None, live_output=False,
-                    server_type="ollama", think=None, on_line=None):
-    """直接呼叫 LLM API 取得回應（串流模式，可更新 spinner 進度或即時輸出）"""
+                    server_type="ollama", think=False, on_line=None):
+    """直接呼叫 LLM API 取得回應（串流模式，可更新 spinner 進度或即時輸出）
+
+    think 預設 False：摘要與逐字稿校正都不需要思考過程，開著會慢上百倍。"""
     return _llm_generate(
         prompt, model, host, port, server_type,
         stream=True, timeout=timeout,
