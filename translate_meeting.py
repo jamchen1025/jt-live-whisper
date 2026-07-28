@@ -2753,7 +2753,9 @@ class OllamaTranslator:
     def _build_prompt(self, text, context):
         _dispatch = {"zh2en": self._build_prompt_zh2en,
                      "ja2zh": self._build_prompt_ja2zh,
-                     "zh2ja": self._build_prompt_zh2ja}
+                     "zh2ja": self._build_prompt_zh2ja,
+                     # 台語辨識結果本身就是漢字，翻英文與中翻英同一條路徑
+                     "nan2en": self._build_prompt_zh2en}
         builder = _dispatch.get(self.direction, self._build_prompt_en2zh)
         return builder(text, context)
 
@@ -2850,7 +2852,7 @@ class OllamaTranslator:
     def warmup(self, max_retries=3, timeout=120):
         """預熱 LLM 模型，確保模型已載入且能正常回應（ASR 耗時可能導致模型被卸載）"""
         _test = {"en2zh": "Hello", "zh2en": "你好", "ja2zh": "こんにちは",
-                 "zh2ja": "你好"}.get(self.direction, "Hello")
+                 "zh2ja": "你好", "nan2en": "你好"}.get(self.direction, "Hello")
         for attempt in range(max_retries):
             try:
                 result = _llm_generate(
@@ -3080,6 +3082,7 @@ class NllbTranslator:
         "zh2en": ("zh", "en"),
         "ja2zh": ("ja", "zh"),
         "zh2ja": ("zh", "ja"),
+        "nan2en": ("zh", "en"),
     }
 
     def __init__(self, direction="en2zh"):
@@ -4269,6 +4272,7 @@ def _input_interactive_menu(args):
         # 離線處理過濾掉「純錄音」模式，並改用離線用語
         _input_labels = {"en2zh": ("英文轉錄+中文翻譯", "英文語音 → 轉錄並翻譯成繁體中文"),
                          "zh2en": ("中文轉錄+英文翻譯", "中文語音 → 轉錄並翻譯成英文"),
+                         "nan2en": ("台語轉錄+英文翻譯", "台語語音 → 轉錄成漢字並翻譯成英文"),
                          "ja2zh": ("日文轉錄+中文翻譯", "日文語音 → 轉錄並翻譯成繁體中文"),
                          "zh2ja": ("中文轉錄+日文翻譯", "中文語音 → 轉錄並翻譯成日文"),
                          "en_zh": ("英中雙向轉錄+翻譯", "系統音訊(英→中) + 麥克風(中→英)，需配對兩個檔案"),
