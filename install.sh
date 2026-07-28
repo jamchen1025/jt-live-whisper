@@ -196,7 +196,7 @@ spinner_stop() {
 print_title() {
     echo ""
     echo -e "${C_TITLE}============================================================${NC}"
-    echo -e "${C_TITLE}${BOLD}  jt-live-whisper v2.16.8 - 100% 全地端 AI 語音工具集 - 安裝程式${NC}"
+    echo -e "${C_TITLE}${BOLD}  jt-live-whisper v2.17.0 - 100% 全地端 AI 語音工具集 - 安裝程式${NC}"
     echo -e "${C_TITLE}  by Jason Cheng (Jason Tools)${NC}"
     echo -e "${C_TITLE}============================================================${NC}"
     echo ""
@@ -408,7 +408,17 @@ check_brew_deps() {
         fi
     fi
     install_brew_formula "ffmpeg" "FFmpeg 音訊轉檔工具"
-    install_brew_cask "blackhole-2ch" "BlackHole 虛擬音訊"
+
+    # BlackHole：macOS 13+ 預設改用 ScreenCaptureKit（見 check_sck），
+    # 這裡只在舊系統或使用者已安裝時處理，不再強制安裝音訊驅動。
+    if brew list --cask 2>/dev/null | grep -q "^blackhole-2ch$"; then
+        check_ok "BlackHole 虛擬音訊 (blackhole-2ch)"
+    elif _sck_macos_ok; then
+        check_notice "略過 BlackHole：macOS 13+ 改用 ScreenCaptureKit 擷取系統音訊"
+        echo -e "  ${C_DIM}若之後不想授權「螢幕錄製」，可自行安裝：brew install --cask blackhole-2ch${NC}"
+    else
+        install_brew_cask "blackhole-2ch" "BlackHole 虛擬音訊"
+    fi
 }
 
 # ─── Python ──────────────────────────────────────
@@ -1198,6 +1208,84 @@ print('found' if found else 'notfound')
 }
 
 # ─── 升級 ────────────────────────────────────────
+# ─── macOS ScreenCaptureKit 系統音訊 helper ──────────────
+# 取代 BlackHole + 多重輸出裝置：直接向 macOS 借系統播放音訊，
+# 使用者不必改變輸出裝置，也不需安裝音訊驅動。需要 macOS 13+ 與「螢幕錄製」權限。
+_sck_macos_ok() {
+    [ "$(uname)" = "Darwin" ] || return 1
+    local major
+    major=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
+    [ -n "$major" ] && [ "$major" -ge 13 ]
+}
+
+build_sck_helper() {
+    _sck_macos_ok || return 0
+    [ -f "$SCRIPT_DIR/sck_audio_capture.swift" ] || return 0
+    command -v swiftc >/dev/null 2>&1 || return 1
+
+    local bin="$SCRIPT_DIR/bin/jt-sck-audio"
+    local stamp="$SCRIPT_DIR/bin/.jt-sck-audio.hash"
+    local src_hash
+    src_hash=$(shasum -a 256 "$SCRIPT_DIR/sck_audio_capture.swift" 2>/dev/null | cut -c1-16)
+
+    # 原始碼未變更且已編譯過 → 略過（編譯約需 1 分鐘）
+    if [ -f "$bin" ] && [ -f "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$src_hash" ]; then
+        return 0
+    fi
+
+    mkdir -p "$SCRIPT_DIR/bin"
+    if swiftc -O -target "$(uname -m)-apple-macos13.0" \
+            -o "$bin" "$SCRIPT_DIR/sck_audio_capture.swift" \
+            -framework ScreenCaptureKit -framework AVFoundation \
+            -framework CoreMedia -framework CoreGraphics >/dev/null 2>&1; then
+        echo "$src_hash" > "$stamp"
+        return 0
+    fi
+    rm -f "$bin" "$stamp"
+    return 1
+}
+
+check_sck() {
+    section "系統音訊擷取（ScreenCaptureKit）"
+    if ! _sck_macos_ok; then
+        check_notice "macOS 12 以下不支援 ScreenCaptureKit，將使用 BlackHole 擷取系統音訊"
+        return 0
+    fi
+    if ! command -v swiftc >/dev/null 2>&1; then
+        check_fail "找不到 swiftc（需要 Xcode Command Line Tools）"
+        echo -e "  ${C_DIM}執行 xcode-select --install 後重跑本安裝程式${NC}"
+        return 1
+    fi
+
+    local bin="$SCRIPT_DIR/bin/jt-sck-audio"
+    if [ -f "$bin" ] && [ -f "$SCRIPT_DIR/bin/.jt-sck-audio.hash" ]; then
+        run_spinner "檢查 ScreenCaptureKit 元件" build_sck_helper
+    else
+        echo -e "  ${C_DIM}編譯 ScreenCaptureKit 音訊元件（約 1 分鐘）...${NC}"
+        run_spinner "編譯 ScreenCaptureKit 元件" build_sck_helper
+    fi
+    if [ ! -f "$bin" ]; then
+        check_fail "ScreenCaptureKit 元件編譯失敗，將改用 BlackHole"
+        return 1
+    fi
+    check_ok "ScreenCaptureKit 元件已就緒"
+
+    # 權限狀態（只取音訊也需要「螢幕錄製」權限）
+    local perm
+    perm=$("$bin" --check 2>/dev/null | grep -o '"permission":[a-z]*' | cut -d: -f2)
+    if [ "$perm" = "true" ]; then
+        check_ok "已取得「螢幕錄製」權限，可直接擷取系統音訊"
+        echo -e "  ${C_DIM}不需要 BlackHole，也不必建立多重輸出裝置${NC}"
+    else
+        check_notice "尚未取得「螢幕錄製」權限"
+        echo -e "  ${C_WHITE}ScreenCaptureKit 只擷取音訊、不會擷取畫面，但 macOS 將其歸在此權限之下${NC}"
+        echo -e "  ${C_DIM}授權方式：執行 ./start.sh --sck-permission，或到${NC}"
+        echo -e "  ${C_DIM}「系統設定 → 隱私權與安全性 → 螢幕錄製」勾選你的終端機程式${NC}"
+        echo -e "  ${C_DIM}授權後需重新啟動終端機程式。未授權時會自動改用 BlackHole${NC}"
+    fi
+    return 0
+}
+
 do_upgrade() {
     section "從 GitHub 升級程式"
 
@@ -1232,14 +1320,15 @@ do_upgrade() {
     if [ "$local_version" = "$remote_version" ]; then
         # 版本相同但檢查是否缺少檔案
         _missing=""
-        for _chk in webui.py webui.html; do
+        for _chk in webui.py webui.html sck_audio_capture.swift; do
             [ ! -f "$SCRIPT_DIR/$_chk" ] && _missing="$_missing $_chk"
         done
         if [ -n "$_missing" ]; then
             echo -e "  ${C_WARN}版本相同但缺少檔案，補充安裝中...${NC}"
-            for _uf in translate_meeting.py start.sh start.ps1 install.sh install.ps1 SOP.md webui.py webui.html; do
+            for _uf in translate_meeting.py start.sh start.ps1 install.sh install.ps1 SOP.md webui.py webui.html sck_audio_capture.swift; do
                 [ -f "$repo_dir/$_uf" ] && cp "$repo_dir/$_uf" "$SCRIPT_DIR/$_uf"
             done
+            build_sck_helper
             check_ok "已補充安裝缺少的檔案（${_missing}）"
         else
             check_ok "已經是最新版本 (v${local_version})"
@@ -1259,7 +1348,7 @@ do_upgrade() {
 
     # 更新主要程式檔案
     local files_updated=0
-    for fname in translate_meeting.py start.sh install.sh SOP.md webui.py webui.html subtitle_overlay.py; do
+    for fname in translate_meeting.py start.sh install.sh SOP.md webui.py webui.html subtitle_overlay.py sck_audio_capture.swift; do
         if [ -f "$repo_dir/$fname" ]; then
             cp "$repo_dir/$fname" "$SCRIPT_DIR/$fname"
             ((files_updated++)) || true
@@ -1268,6 +1357,9 @@ do_upgrade() {
 
     # 確保腳本可執行
     chmod +x "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/install.sh" 2>/dev/null
+
+    # ScreenCaptureKit helper 原始碼可能一併更新，重新編譯
+    build_sck_helper
 
     check_ok "已升級 v${local_version} → v${remote_version}（更新 ${files_updated} 個檔案）"
     echo ""
@@ -2344,6 +2436,23 @@ verify_installation() {
         echo -e "  ${C_DIM}[略過]${NC} whisper.cpp 未安裝（離線模式、Moonshine、GPU 伺服器不受影響）"
     fi
 
+    # ScreenCaptureKit 系統音訊
+    if _sck_macos_ok; then
+        if [ -x "$SCRIPT_DIR/bin/jt-sck-audio" ]; then
+            local _sck_perm
+            _sck_perm=$("$SCRIPT_DIR/bin/jt-sck-audio" --check 2>/dev/null | grep -o '"permission":[a-z]*' | cut -d: -f2)
+            if [ "$_sck_perm" = "true" ]; then
+                check_ok "ScreenCaptureKit（系統音訊擷取，已授權）"
+            else
+                check_notice "ScreenCaptureKit 已就緒但尚未授權「螢幕錄製」"
+                echo -e "  ${C_DIM}執行 ./start.sh --sck-permission 完成授權；未授權時改用 BlackHole${NC}"
+            fi
+        else
+            check_fail "ScreenCaptureKit 元件未編譯"
+            ((verify_failed++)) || true
+        fi
+    fi
+
     # PyQt6
     if python3 -c "from PyQt6.QtWidgets import QApplication" &>/dev/null 2>&1; then
         check_ok "PyQt6（懸浮字幕視窗）"
@@ -2560,6 +2669,7 @@ check_running_processes || exit 1
 check_disk_space || exit 1
 check_homebrew || exit 1
 check_brew_deps
+check_sck
 check_python || exit 1
 check_whisper_cpp
 check_whisper_models

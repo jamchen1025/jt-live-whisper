@@ -53,7 +53,7 @@
   <div class="wrap">
     <div class="sec-head"><h2><span class="zh">系統需求</span><span class="en">System requirements</span></h2></div>
     <div class="grid g3">
-      <div class="card"><h3><span class="badge">A</span>macOS</h3><p><span class="zh">macOS（Apple Silicon / Intel）· Python 3.12+ · <a href="https://brew.sh/" target="_blank" rel="noopener">Homebrew</a>（需事先安裝）· <a href="https://existential.audio/blackhole/" target="_blank" rel="noopener">BlackHole 2ch</a>（虛擬音訊驅動，安裝腳本會自動安裝）</span><span class="en">macOS (Apple Silicon / Intel) · Python 3.12+ · <a href="https://brew.sh/" target="_blank" rel="noopener">Homebrew</a> (pre-installed) · <a href="https://existential.audio/blackhole/" target="_blank" rel="noopener">BlackHole 2ch</a> (auto-installed)</span></p></div>
+      <div class="card"><h3><span class="badge">A</span>macOS</h3><p><span class="zh">macOS（Apple Silicon / Intel）· Python 3.12+ · <a href="https://brew.sh/" target="_blank" rel="noopener">Homebrew</a>（需事先安裝）· <a href="https://existential.audio/blackhole/" target="_blank" rel="noopener">BlackHole 2ch</a>（虛擬音訊驅動，<b>選配</b>；macOS 13 以上預設用內建 ScreenCaptureKit，免安裝驅動）</span><span class="en">macOS (Apple Silicon / Intel) · Python 3.12+ · <a href="https://brew.sh/" target="_blank" rel="noopener">Homebrew</a> (pre-installed) · <a href="https://existential.audio/blackhole/" target="_blank" rel="noopener">BlackHole 2ch</a> (<b>optional</b>; macOS 13+ uses the built-in ScreenCaptureKit, no driver needed)</span></p></div>
       <div class="card"><h3><span class="badge">B</span>Windows</h3><p><span class="zh">Windows 10 以上 · Python 3.12+（從 <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org</a> 安裝，勾選「Add to PATH」）· PowerShell 5.1+（Windows 10 內建）</span><span class="en">Windows 10+ · Python 3.12+ (from <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org</a>, check "Add to PATH") · PowerShell 5.1+ (built in)</span></p></div>
       <div class="card"><h3><span class="badge">C</span><span class="zh">共通</span><span class="en">Common</span></h3><p><span class="zh">地端 LLM 伺服器（翻譯 / 摘要用，推薦 <a href="https://ollama.com/" target="_blank" rel="noopener">Ollama</a>）。<b>沒有 LLM 伺服器也能用</b>：可切換為 NLLB / Argos 離線翻譯，但摘要功能需要 LLM。</span><span class="en">A local LLM server (for translation/summary; <a href="https://ollama.com/" target="_blank" rel="noopener">Ollama</a> recommended). <b>Works without one</b> via NLLB / Argos offline translation — but summaries need an LLM.</span></p></div>
     </div>
@@ -103,13 +103,14 @@ irm https://raw.githubusercontent.com/jasoncheng7115/jt-live-whisper/main/instal
 
     <h3 style="margin:28px 0 10px"><span class="zh">2. 設定音訊裝置</span><span class="en">2. Set up audio</span></h3>
     <div class="grid g2">
-      <div class="card"><h3><span class="ic"></span>macOS — BlackHole</h3>
-        <p style="font-size:14px"><span class="zh">安裝 BlackHole 後需<b>重新啟動電腦</b>，再到「音訊 MIDI 設定」建立虛擬裝置：</span><span class="en">After installing BlackHole, <b>restart</b>, then in "Audio MIDI Setup" create:</span></p>
+      <div class="card"><h3><span class="ic"></span>macOS — ScreenCaptureKit</h3>
+        <p style="font-size:14px"><span class="zh">macOS 13 以上<b>不需要安裝任何驅動</b>：使用系統內建的 ScreenCaptureKit 擷取系統音訊，不必建立多重輸出裝置、不必重開機，Zoom / Teams 的喇叭與麥克風設定也完全不用改，喇叭或耳機照常出聲。</span><span class="en">On macOS 13+ <b>no audio driver is needed</b>: system audio is captured with the built-in ScreenCaptureKit — no Multi-Output Device, no reboot, and no changes to your Zoom/Teams audio settings.</span></p>
         <ul style="margin:8px 0 0;padding-left:18px;font-size:13.5px;line-height:1.75;color:var(--body)">
-          <li><span class="zh"><b>多重輸出裝置</b>（必要）：勾選喇叭 / 耳機 + BlackHole 2ch，主裝置選 BlackHole；到「系統設定 → 聲音 → 輸出」選此裝置。讓系統音訊同時送到耳機與 BlackHole，程式才能擷取對方聲音。</span><span class="en"><b>Multi-Output Device</b> (required): check your speakers/headphones + BlackHole 2ch, set BlackHole as primary, then select it in System Settings → Sound → Output.</span></li>
-          <li><span class="zh"><b>聚集裝置</b>（選配，錄雙方聲音用）：勾選 BlackHole 2ch + 麥克風，時脈來源選 BlackHole，其他裝置勾「偏移修正」。程式會自動偵測為錄音裝置。</span><span class="en"><b>Aggregate Device</b> (optional, to record both sides): check BlackHole 2ch + your mic, clock source BlackHole, "Drift Correction" on others. Auto-detected for recording.</span></li>
+          <li><span class="zh"><b>只需授權一次「螢幕錄製」</b>（macOS 15 顯示為「螢幕與系統音訊錄製」）。macOS 把 ScreenCaptureKit 歸在此權限下，即使程式只取音訊、不擷取畫面。</span><span class="en"><b>Grant "Screen Recording" once</b> ("Screen &amp; System Audio Recording" on macOS 15). macOS files ScreenCaptureKit under this permission even though only audio is captured.</span></li>
+          <li><span class="zh"><b>授權對象是你的終端機程式</b>（Terminal / iTerm2 / Ghostty / VS Code…），不是 Python。程式會自動判讀並指名該勾選哪一個，首次執行時直接詢問是否開啟授權對話框。</span><span class="en"><b>The permission belongs to your terminal app</b> (Terminal / iTerm2 / Ghostty / VS Code…), not Python. The app detects and names it for you, and offers to open the dialog on first run.</span></li>
+          <li><span class="zh"><b>授權後需用 Cmd+Q 完全結束該終端機程式再重新開啟</b>，權限才會生效。隨時可用 <code>./start.sh --sck-permission</code> 重新授權，WebUI 設定頁也有授權按鈕。</span><span class="en"><b>Quit the terminal app completely (Cmd+Q) and reopen it</b> for the permission to take effect. Re-authorize anytime with <code>./start.sh --sck-permission</code>, or from the WebUI settings page.</span></li>
         </ul>
-        <p class="note" style="margin-top:12px;font-size:13px"><span class="zh">Zoom / Teams 的喇叭輸出要設成「多重輸出裝置」，不能直接選 AirPods，否則 BlackHole 收不到聲音。麥克風維持原設定即可。</span><span class="en">Set Zoom/Teams speaker output to the Multi-Output Device (not AirPods directly), or BlackHole gets no audio. Leave the mic as-is.</span></p>
+        <p class="note" style="margin-top:12px;font-size:13px"><span class="zh">系統設為靜音時只會收到無聲訊號（用耳機聽沒問題，但不要靜音）。macOS 12 以下或不想授權時，仍可改用 BlackHole：安裝驅動 → 重開機 → 建立多重輸出裝置（勾選喇叭 + BlackHole 2ch、主裝置選 BlackHole）→ 系統設定選此裝置；也可用 <code>--audio-source blackhole</code> 強制指定。</span><span class="en">Muting system output yields silence (headphones are fine — just don’t mute). On macOS 12 or if you prefer not to grant the permission, BlackHole still works: install → reboot → create a Multi-Output Device (speakers + BlackHole 2ch, BlackHole as primary) → select it in System Settings; or force it with <code>--audio-source blackhole</code>.</span></p>
       </div>
       <div class="card"><h3><span class="ic"></span>Windows — WASAPI</h3>
         <p style="font-size:14px"><span class="zh">Windows <b>不需要</b>安裝額外虛擬音訊驅動。程式透過 WASAPI Loopback 直接擷取系統播放的音訊，大多數情況不需手動設定。</span><span class="en">Windows needs <b>no</b> extra audio driver — the app captures system playback via WASAPI Loopback, usually with zero setup.</span></p>
@@ -276,7 +277,7 @@ cd C:\jt-live-whisper
       <div>
         <div class="cmd-label"><span class="zh">技術架構</span><span class="en">Pipeline</span></div>
 <pre><span class="c"># 即時模式</span>
-<span class="g">系統音訊</span>(BlackHole / WASAPI)
+<span class="g">系統音訊</span>(ScreenCaptureKit / WASAPI)
   → Whisper / Moonshine <span class="c"># 地端辨識</span>
     → LLM / NLLB / Argos <span class="c"># 地端翻譯</span>
       → <span class="g">終端字幕 + 記錄檔</span>

@@ -1,5 +1,41 @@
 # Changelog
 
+### v2.17.0 (2026-07-29)
+
+**新增 — macOS 改用 ScreenCaptureKit 擷取系統音訊，不必再裝 BlackHole**
+- macOS 13 以上改以 ScreenCaptureKit（SCK）直接向系統借音訊，成為預設的系統音訊來源
+- 使用者**不需要**再安裝 BlackHole 虛擬音訊驅動、不需要建立「多重輸出裝置」、不需要把 Zoom / Teams 的喇叭改指到虛擬裝置，也不必為了裝驅動重開機
+- 音訊照常從原本的喇叭或耳機播放，不受影響；SCK 只是額外複製一份給辨識程式
+- 實作為獨立的 Swift 元件 `sck_audio_capture.swift`（編譯為 `bin/jt-sck-audio`），不引入 pyobjc；`install.sh` 會自動編譯，原始碼未變更時直接沿用既有二進位檔
+- macOS 12 以下、未授權「螢幕錄製」、或指定 `--audio-source blackhole` 時，自動沿用原本的 BlackHole 流程，既有使用者的設定完全不受影響
+
+**新增 — 「螢幕錄製」權限引導**
+- SCK 即使只取音訊，macOS 仍將其歸類在「螢幕錄製」權限之下（macOS 15 顯示為「螢幕與系統音訊錄製」），且授權對象是**啟動本程式的終端機程式**（Terminal / iTerm2 / Ghostty / VS Code…），不是 Python
+- 程式會自動判讀 `TERM_PROGRAM` 並在提示中**指名該勾選哪一個程式**，避免使用者在設定頁裡找不到對象
+- 終端機互動時直接詢問「現在開啟授權對話框？」，同意即跳出系統授權視窗；若先前按過拒絕（macOS 不會再跳），則自動開啟「系統設定 → 隱私權與安全性 → 螢幕錄製」頁面
+- 授權後 macOS 要求該終端機程式完全結束（Cmd+Q）再重新開啟才會生效，提示訊息會明確說明
+- 隨時可用 `./start.sh --sck-permission` 重新授權；WebUI 設定頁同樣提供授權按鈕並指名授權對象
+- 已安裝 BlackHole 但尚未授權時，過去會靜默降級，現在會明確告知 SCK 未啟用與啟用方式
+
+**新增 — 單向即時本機辨識支援 mlx-whisper GPU 加速**
+- 過去 macOS 單機單向即時辨識預設走 whisper.cpp，而 whisper.cpp 的 `whisper-stream` 只能讀 SDL2 音訊裝置、餵不進 SCK
+- 因此將雙向模式既有的 mlx-whisper GPU 路徑一併導入單向即時辨識，SCK 音源全部走 Python 端辨識
+- `--asr faster-whisper` 時尊重使用者選擇；`.en` 系列模型因無對應 mlx-community repo，仍走 faster-whisper
+
+**改善 — mlx-whisper 辨識不再為每段音訊啟動 ffmpeg 子程序**
+- 過去傳檔案路徑給 mlx-whisper，它內部會為每一段音訊 spawn 一次 ffmpeg 解碼；即時模式每 3 秒一段，成本可觀，且 ffmpeg 一旦損壞整條即時辨識就停擺
+- 改為自行用 `wave` + `scipy` 解出 16kHz 單聲道 float32 陣列後直接餵入（mlx-whisper 本來就接受陣列）
+- 實測 8 秒 48kHz 音訊：解碼 **230.7ms → 9.8ms（23.5 倍）**，即時步進 3 秒下等於每輪多出 7% 的時間餘裕，雙向模式兩路則加倍
+- 以 6 段真實中文會議音訊 A/B 驗證，辨識文字**完全一致**（波形相關係數 0.999997）；任何一步失敗會自動退回原本的檔案路徑走法
+
+**修正 — 錄音裝置聲道數在重構後少了保護**
+- 音訊串流建立邏輯統一為 `_capture_stream_info()` / `_open_capture_stream()` 時，錄音路徑漏掉原本的「至少 1 聲道」下限
+- 混合錄音（系統音訊 + 麥克風）的系統音訊聲道數被誤套上限 2；Windows 多聲道輸出時人聲多半在中央聲道，截到 2ch 會漏掉內容，已還原為保留原始聲道數
+
+**修正 — 收不到音訊時的提示不再一律指向 WASAPI**
+- macOS 使用 SCK 時，過去會顯示「請檢查 WASAPI Loopback 裝置」，現在依實際擷取來源給對應說明
+- 並補上實測行為：**系統輸出設為靜音時，ScreenCaptureKit 只會收到無聲訊號**，提示中直接點明
+
 ### v2.16.8 (2026-07-09)
 
 **修正 — Ollama 關閉思考模式的參數放錯位置，思考模式從未真正關閉**

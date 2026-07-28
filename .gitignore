@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# macOS
+.DS_Store
+
+# 編譯產物
+whisper.cpp/
+
+# 使用者設定
+config.json
+
+# 產出檔案
+logs/
+recordings/
+
+# 暫存檔
+.whisper_output.txt
+.tmp_*
+
+# IDE
+.vscode/
+.idea/
+.claude/

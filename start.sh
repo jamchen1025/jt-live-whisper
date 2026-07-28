@@ -20,7 +20,7 @@ _COLS=$(tput cols 2>/dev/null || echo 60)
 [ "$_COLS" -lt 40 ] && _COLS=40
 _LINE=$(printf '%*s' "$_COLS" '' | tr ' ' '=')
 echo -e "${C_TITLE}${_LINE}${NC}"
-echo -e "${C_TITLE}${BOLD}  jt-live-whisper v2.16.8 - 100% 全地端 AI 語音工具集${NC}"
+echo -e "${C_TITLE}${BOLD}  jt-live-whisper v2.17.0 - 100% 全地端 AI 語音工具集${NC}"
 echo -e "${C_TITLE}  by Jason Cheng (Jason Tools)${NC}"
 echo -e "${C_TITLE}${_LINE}${NC}"
 echo ""
@@ -41,11 +41,20 @@ fi
 # --input 和 --summarize 模式不需要 BlackHole
 SKIP_BLACKHOLE=0
 for arg in "$@"; do
-    if [ "$arg" = "--input" ] || [ "$arg" = "--summarize" ] || [ "$arg" = "--diarize" ]; then
+    if [ "$arg" = "--input" ] || [ "$arg" = "--summarize" ] || [ "$arg" = "--diarize" ] \
+       || [ "$arg" = "--sck-permission" ] || [ "$arg" = "--list-devices" ]; then
         SKIP_BLACKHOLE=1
         break
     fi
 done
+
+# ScreenCaptureKit 已授權時不需要 BlackHole 與多重輸出裝置（macOS 13+）
+if [ "$SKIP_BLACKHOLE" -eq 0 ] && [ -x "$SCRIPT_DIR/bin/jt-sck-audio" ]; then
+    if "$SCRIPT_DIR/bin/jt-sck-audio" --check 2>/dev/null | grep -q '"permission":true'; then
+        SKIP_BLACKHOLE=1
+        echo -e "${C_OK}系統音訊: ScreenCaptureKit（不需 BlackHole）${NC}"
+    fi
+fi
 
 # 檢查音訊裝置
 if [ "$SKIP_BLACKHOLE" -eq 0 ]; then
@@ -80,6 +89,11 @@ if [ "$SKIP_BLACKHOLE" -eq 0 ]; then
 
     if [ -n "$MISSING" ]; then
         echo ""
+        if [ -f "$SCRIPT_DIR/sck_audio_capture.swift" ]; then
+            echo -e "${C_OK}建議改用 ScreenCaptureKit：不需 BlackHole、不必建立多重輸出裝置${NC}"
+            echo -e "  ${C_DIM}授權指令：./start.sh --sck-permission${NC}"
+            echo ""
+        fi
         echo -e "${C_WHITE}詳細設定方式請參考 SOP.md 第二章「事前準備：macOS 音訊設定」${NC}"
         echo ""
         read -p "是否仍然繼續？(y/N) " -n 1 -r

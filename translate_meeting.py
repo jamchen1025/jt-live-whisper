@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 即時英文語音轉繁體中文字幕
-透過 BlackHole 虛擬音訊裝置捕捉音訊，
-使用 whisper.cpp stream 即時轉錄，再翻譯成繁體中文。
+擷取系統播放音訊（macOS 用 ScreenCaptureKit，舊版可用 BlackHole；
+Windows 用 WASAPI Loopback），使用 whisper.cpp stream 即時轉錄，
+再翻譯成繁體中文。
 
 Author: Jason Cheng (Jason Tools)
 """
@@ -126,6 +127,9 @@ except ImportError:
 # Windows WASAPI Loopback（零設定擷取系統播放音訊）
 WASAPI_LOOPBACK_ID = -100  # sentinel，表示使用 WASAPI Loopback
 WASAPI_MIXED_ID = -200     # sentinel，表示 Windows 混合錄音（Loopback + 麥克風）
+# macOS ScreenCaptureKit（零設定擷取系統播放音訊，macOS 13+）
+SCK_LOOPBACK_ID = -300     # sentinel，表示使用 ScreenCaptureKit
+SCK_MIXED_ID = -400        # sentinel，表示 macOS 混合錄音（ScreenCaptureKit + 麥克風）
 _PYAUDIOWPATCH_AVAILABLE = False
 if IS_WINDOWS:
     try:
@@ -416,8 +420,12 @@ def _detect_bidi_devices():
             return (WASAPI_LOOPBACK_ID, wb_info["name"],
                     mic_id, sd.query_devices(mic_id)["name"])
     elif IS_MACOS:
-        lb_id = _find_blackhole_device()
         mic_id = _find_mac_mic()
+        # 優先 ScreenCaptureKit（零設定），未授權或舊系統才退回 BlackHole
+        if _sck_available() and mic_id is not None:
+            return (SCK_LOOPBACK_ID, "ScreenCaptureKit 系統音訊",
+                    mic_id, sd.query_devices(mic_id)["name"])
+        lb_id = _find_blackhole_device()
         if lb_id is not None and mic_id is not None:
             return (lb_id, sd.query_devices(lb_id)["name"],
                     mic_id, sd.query_devices(mic_id)["name"])
@@ -472,6 +480,417 @@ class _WasapiLoopbackStream:
         self.stop()
         self._stream.close()
         self._p.terminate()
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
+        self.close()
+
+
+# ── macOS ScreenCaptureKit 系統音訊擷取 ─────────────────────────
+# 由 sck_audio_capture.swift 編譯出的 helper 取得系統播放音訊，
+# 不需要 BlackHole 虛擬裝置與多重輸出裝置，使用者也不必改變輸出裝置。
+# 需要 macOS 13+ 與「螢幕錄製」權限（SCK 即使只取音訊也歸在此權限）。
+
+_SCK_SAMPLERATE = 48000
+_SCK_CHANNELS = 2
+_SCK_FORCE_OFF = False  # --audio-source blackhole 時停用 SCK
+_SCK_SRC_NAME = "sck_audio_capture.swift"
+_SCK_BIN_NAME = "jt-sck-audio"
+
+
+def _sck_source_path():
+    return os.path.join(SCRIPT_DIR, _SCK_SRC_NAME)
+
+
+def _sck_binary_path():
+    return os.path.join(SCRIPT_DIR, "bin", _SCK_BIN_NAME)
+
+
+def _sck_macos_ok():
+    """macOS 版本是否支援 ScreenCaptureKit 音訊擷取（13.0+）"""
+    if not IS_MACOS:
+        return False
+    try:
+        import platform
+        ver = platform.mac_ver()[0]
+        return int(ver.split(".")[0]) >= 13
+    except Exception:
+        return False
+
+
+def _sck_source_hash():
+    try:
+        import hashlib
+        with open(_sck_source_path(), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
+def _sck_build(verbose=True):
+    """需要時編譯 SCK helper。回傳可執行檔路徑或 None。
+    以原始碼 hash 判斷是否需要重編，避免每次啟動都花時間。"""
+    if not _sck_macos_ok() or not os.path.isfile(_sck_source_path()):
+        return None
+    binary = _sck_binary_path()
+    stamp = os.path.join(os.path.dirname(binary), f".{_SCK_BIN_NAME}.hash")
+    src_hash = _sck_source_hash()
+    if os.path.isfile(binary) and src_hash:
+        try:
+            with open(stamp, "r", encoding="utf-8") as f:
+                if f.read().strip() == src_hash:
+                    return binary
+        except Exception:
+            pass
+    import shutil
+    if not shutil.which("swiftc"):
+        if verbose:
+            print(f"  {C_HIGHLIGHT}[系統音訊] 找不到 swiftc，無法編譯 ScreenCaptureKit 元件{RESET}")
+            print(f"  {C_DIM}請安裝 Xcode Command Line Tools：xcode-select --install{RESET}")
+        return None
+    if verbose:
+        print(f"  {C_DIM}[系統音訊] 首次使用 ScreenCaptureKit，編譯元件中（約 1 分鐘）...{RESET}")
+    os.makedirs(os.path.dirname(binary), exist_ok=True)
+    import platform
+    cmd = [
+        "swiftc", "-O",
+        "-target", f"{platform.machine()}-apple-macos13.0",
+        "-o", binary, _sck_source_path(),
+        "-framework", "ScreenCaptureKit", "-framework", "AVFoundation",
+        "-framework", "CoreMedia", "-framework", "CoreGraphics",
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        if verbose:
+            print(f"  {C_HIGHLIGHT}[系統音訊] 編譯失敗: {e}{RESET}")
+        return None
+    if r.returncode != 0 or not os.path.isfile(binary):
+        if verbose:
+            print(f"  {C_HIGHLIGHT}[系統音訊] 編譯失敗{RESET}")
+            err = (r.stderr or "").strip().splitlines()
+            for line in err[-5:]:
+                print(f"  {C_DIM}{line}{RESET}")
+        return None
+    try:
+        with open(stamp, "w", encoding="utf-8") as f:
+            f.write(src_hash)
+    except Exception:
+        pass
+    if verbose:
+        print(f"  {C_OK}[系統音訊] ScreenCaptureKit 元件編譯完成{RESET}")
+    return binary
+
+
+def _sck_check(build=True, verbose=False):
+    """查詢 SCK 能力與權限，回傳 dict(available, permission, macos) 或 None。"""
+    binary = _sck_binary_path()
+    if not os.path.isfile(binary):
+        if not build:
+            return None
+        binary = _sck_build(verbose=verbose)
+        if not binary:
+            return None
+    else:
+        # 原始碼有更新時重編
+        rebuilt = _sck_build(verbose=verbose) if build else binary
+        binary = rebuilt or binary
+    try:
+        r = subprocess.run([binary, "--check"], capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return None
+        return json.loads(r.stdout.strip())
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _sck_supported():
+    """SCK 元件是否可用（macOS 版本 + 元件編譯成功），不含權限判斷。"""
+    if not _sck_macos_ok():
+        return False
+    info = _sck_check(build=False)
+    return bool(info and info.get("available"))
+
+
+def _sck_permission():
+    """是否已取得「螢幕錄製」權限（每次查詢，使用者可能中途授權）。"""
+    if not _sck_macos_ok():
+        return False
+    info = _sck_check(build=False)
+    return bool(info and info.get("permission"))
+
+
+def _sck_available():
+    """SCK 是否可直接使用（元件就緒 + 已授權 + 未被 --audio-source 停用）"""
+    if _SCK_FORCE_OFF:
+        return False
+    return _sck_supported() and _sck_permission()
+
+
+def _sck_request_permission():
+    """觸發系統「螢幕錄製」授權對話框，回傳是否已授權。"""
+    binary = _sck_binary_path()
+    if not os.path.isfile(binary):
+        binary = _sck_build()
+        if not binary:
+            return False
+    try:
+        r = subprocess.run([binary, "--request"], capture_output=True, text=True, timeout=60)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_SCK_TERMINAL_NAMES = {
+    "Apple_Terminal": "終端機 (Terminal)",
+    "iTerm.app": "iTerm2",
+    "ghostty": "Ghostty",
+    "WarpTerminal": "Warp",
+    "vscode": "Visual Studio Code",
+    "Hyper": "Hyper",
+    "WezTerm": "WezTerm",
+    "kitty": "kitty",
+    "alacritty": "Alacritty",
+    "Tabby": "Tabby",
+}
+
+
+def _sck_terminal_app_name():
+    """回傳需要授權的程式名稱。
+    macOS 把「螢幕錄製」權限授予啟動本程式的終端機 / IDE，不是 python 本身，
+    使用者常在設定頁找不到該勾誰，所以這裡直接指名。"""
+    term = os.environ.get("TERM_PROGRAM", "")
+    return _SCK_TERMINAL_NAMES.get(term, term or "你用來執行本程式的終端機程式")
+
+
+def _sck_open_privacy_settings():
+    """直接開啟「系統設定 → 隱私權與安全性 → 螢幕錄製」頁面"""
+    try:
+        subprocess.run(
+            ["open", "x-apple.systempreferences:com.apple.preference.security"
+                     "?Privacy_ScreenCapture"],
+            check=False, capture_output=True, timeout=10)
+        return True
+    except Exception:
+        return False
+
+
+def _sck_permission_hint(interactive=None):
+    """權限未授予時的引導（CLI 用）。
+    互動終端下直接詢問是否跳出授權對話框，被拒或曾拒絕過則改開系統設定頁。
+    回傳是否已在本次取得授權（仍需重啟終端機才會生效）。"""
+    app = _sck_terminal_app_name()
+    print(f"\n  {C_HIGHLIGHT}[系統音訊] 需要「螢幕錄製」權限才能擷取系統聲音{RESET}")
+    print(f"  {C_DIM}ScreenCaptureKit 只取音訊、不會擷取畫面，但 macOS 將其歸在此權限之下。{RESET}")
+    print(f"  {C_DIM}授權對象是「{app}」，不是 Python。{RESET}")
+
+    if interactive is None:
+        interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
+    if interactive:
+        try:
+            ans = input(f"  {C_WHITE}現在開啟授權對話框？(Y/n)：{RESET}").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = "n"
+        if ans in ("", "y", "yes"):
+            if _sck_request_permission():
+                print(f"  {C_OK}已取得授權 — 請完全結束「{app}」（Cmd+Q）再重新開啟，"
+                      f"然後重跑一次{RESET}\n")
+                return True
+            print(f"  {C_DIM}系統沒有跳出對話框（多半是先前按過拒絕），改為開啟設定頁{RESET}")
+            _sck_open_privacy_settings()
+
+    print(f"  {C_WHITE}請到「系統設定 → 隱私權與安全性 → 螢幕錄製」勾選「{app}」，{RESET}")
+    print(f"  {C_WHITE}再完全結束「{app}」（Cmd+Q）並重新開啟，權限才會生效。{RESET}")
+    print(f"  {C_DIM}（也可隨時執行 ./start.sh --sck-permission 重新授權）{RESET}")
+    print(f"  {C_DIM}（或改用 BlackHole：{_INSTALL_CMD} 會協助安裝，適用 macOS 12 以下）{RESET}\n")
+    return False
+
+
+def _is_sys_audio_device(device_id):
+    """是否為「系統播放音訊」的擷取 sentinel（WASAPI Loopback / ScreenCaptureKit）"""
+    return ((IS_WINDOWS and device_id == WASAPI_LOOPBACK_ID)
+            or (IS_MACOS and device_id == SCK_LOOPBACK_ID))
+
+
+def _capture_stream_info(device_id, cap_channels=2):
+    """回傳擷取裝置的 (samplerate, channels)。
+    支援 WASAPI Loopback / ScreenCaptureKit 兩個 sentinel，其餘查 sounddevice。
+    cap_channels=None 表示不限制聲道數（錄音用，保留原始聲道）。"""
+    def _cap(ch):
+        # cap_channels=None（錄音用）保留原始聲道數，但至少 1 聲道
+        return max(int(ch), 1) if cap_channels is None else min(int(ch), cap_channels)
+
+    if IS_WINDOWS and device_id == WASAPI_LOOPBACK_ID:
+        wb_info = _find_wasapi_loopback()
+        if wb_info:
+            return int(wb_info["defaultSampleRate"]), _cap(wb_info["maxInputChannels"])
+    if IS_MACOS and device_id == SCK_LOOPBACK_ID:
+        return _SCK_SAMPLERATE, _cap(_SCK_CHANNELS)
+    import sounddevice as sd
+    dev_info = sd.query_devices(device_id)
+    return int(dev_info["default_samplerate"]), _cap(dev_info["max_input_channels"])
+
+
+def _open_capture_stream(device_id, callback, samplerate, channels, blocksize,
+                         dtype="float32"):
+    """依裝置 ID 建立音訊輸入串流，介面一致（start/stop/close）。
+    WASAPI Loopback / ScreenCaptureKit 走各自的包裝類別，其餘走 sd.InputStream。"""
+    if IS_WINDOWS and device_id == WASAPI_LOOPBACK_ID:
+        return _WasapiLoopbackStream(
+            callback=callback, samplerate=samplerate,
+            channels=channels, blocksize=blocksize)
+    if IS_MACOS and device_id == SCK_LOOPBACK_ID:
+        return _SCKLoopbackStream(
+            callback=callback, samplerate=samplerate,
+            channels=channels, blocksize=blocksize)
+    import sounddevice as sd
+    return sd.InputStream(
+        device=device_id, samplerate=samplerate, channels=channels,
+        blocksize=blocksize, dtype=dtype, callback=callback)
+
+
+def _no_audio_hint(device_id):
+    """收不到音訊時的排查提示（依實際擷取來源給對應說明）"""
+    if IS_MACOS and device_id == SCK_LOOPBACK_ID:
+        return ("請確認系統喇叭正在播放聲音；"
+                "系統若設為靜音，ScreenCaptureKit 只會收到無聲訊號")
+    if IS_WINDOWS and device_id == WASAPI_LOOPBACK_ID:
+        return "請確認系統喇叭正在播放聲音，並檢查 WASAPI Loopback 裝置是否正確"
+    return "請確認系統喇叭正在播放聲音，並檢查所選音訊裝置是否正確"
+
+
+_WHISPER_INPUT_SR = 16000   # Whisper 固定輸入取樣率
+
+
+def _mlx_input(wav_path):
+    """回傳 mlx-whisper 的音訊輸入。
+
+    mlx-whisper 拿到「檔案路徑」時，內部會為每一段音訊 spawn 一次 ffmpeg 解碼；
+    即時模式每 3 秒就一段，這個子程序成本可觀，且 ffmpeg 一壞整條即時辨識就停擺。
+    這裡改成自行用 wave + scipy 解出 16kHz 單聲道 float32 ndarray 餵進去
+    （mlx-whisper 的 audio 參數本來就接受 ndarray），資料內容與 ffmpeg 解出的相同。
+    任何一步失敗就退回原本的檔案路徑，讓 mlx-whisper 照舊走 ffmpeg。"""
+    try:
+        import numpy as _np
+        from math import gcd as _gcd
+        from scipy.signal import resample_poly as _resample_poly
+
+        with wave.open(wav_path, "r") as _wf:
+            _sr = _wf.getframerate()
+            _ch = _wf.getnchannels()
+            if _wf.getsampwidth() != 2:
+                return wav_path
+            _raw = _wf.readframes(_wf.getnframes())
+        _audio = _np.frombuffer(_raw, dtype=_np.int16).astype(_np.float32) / 32768.0
+        if _ch > 1:
+            _audio = _audio.reshape(-1, _ch).mean(axis=1)
+        if _sr != _WHISPER_INPUT_SR:
+            _g = _gcd(int(_sr), _WHISPER_INPUT_SR)
+            _audio = _resample_poly(_audio, _WHISPER_INPUT_SR // _g, int(_sr) // _g)
+        return _np.ascontiguousarray(_audio, dtype=_np.float32)
+    except Exception:
+        return wav_path
+
+
+class _SCKLoopbackStream:
+    """包裝 ScreenCaptureKit helper，介面對齊 sd.InputStream。
+    callback 簽名：(numpy_array, frames, time_info, status)"""
+
+    def __init__(self, callback, samplerate=_SCK_SAMPLERATE, channels=_SCK_CHANNELS,
+                 blocksize=None, dtype="float32"):
+        import numpy as np
+        self._callback = callback
+        self._samplerate = int(samplerate)
+        self._channels = int(channels)
+        self._blocksize = int(blocksize or self._samplerate * 0.1)
+        self._np = np
+        self._proc = None
+        self._thread = None
+        self._stop = threading.Event()
+        self._stderr_tail = deque(maxlen=10)
+        self._binary = _sck_binary_path()
+        if not os.path.isfile(self._binary):
+            built = _sck_build()
+            if not built:
+                raise RuntimeError("ScreenCaptureKit 元件無法編譯")
+            self._binary = built
+
+    def _reader(self):
+        chunk_bytes = self._blocksize * self._channels * 4
+        np = self._np
+        stdout = self._proc.stdout
+        # 注意：bufsize=0 的 pipe，read(n) 只保證「最多 n 位元組」（helper 一次寫
+        # 960 frames = 7680 bytes），必須自行累積滿一個 block 才送出，
+        # 不可補零湊滿 —— 否則會憑空插入靜音、音訊長度暴增數倍。
+        pending = b""
+        while not self._stop.is_set():
+            try:
+                piece = stdout.read(chunk_bytes - len(pending))
+            except Exception:
+                break
+            if not piece:
+                break  # EOF：不足一個 block 的尾端直接捨棄
+            pending += piece
+            if len(pending) < chunk_bytes:
+                continue
+            audio = np.frombuffer(pending, dtype=np.float32).reshape(-1, self._channels)
+            pending = b""
+            if self._callback and not self._stop.is_set():
+                try:
+                    self._callback(audio, audio.shape[0], None, None)
+                except Exception:
+                    pass
+
+    def _drain_stderr(self):
+        for line in iter(self._proc.stderr.readline, b""):
+            try:
+                self._stderr_tail.append(line.decode("utf-8", "replace").strip())
+            except Exception:
+                pass
+
+    def start(self):
+        if self._proc is not None:
+            return
+        self._proc = subprocess.Popen(
+            [self._binary, "--rate", str(self._samplerate),
+             "--channels", str(self._channels)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+        )
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        # helper 啟動失敗（多半是權限問題）時立刻回報，不要讓使用者空等
+        time.sleep(0.6)
+        if self._proc.poll() is not None:
+            msg = "; ".join(self._stderr_tail) or f"helper 結束（exit {self._proc.returncode}）"
+            self._proc = None
+            raise RuntimeError(msg)
+        self._thread = threading.Thread(target=self._reader, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._proc and self._proc.poll() is None:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+
+    def close(self):
+        self.stop()
+        for pipe in ("stdout", "stderr"):
+            try:
+                getattr(self._proc, pipe).close()
+            except Exception:
+                pass
+        self._proc = None
 
     def __enter__(self):
         self.start()
@@ -664,6 +1083,20 @@ def _fw_local_cuda_ok():
         return False
 
 
+# mlx-community 有對應 repo 的模型（.en 系列不在其中，需退回 faster-whisper）
+_MLX_CAPABLE_MODELS = {"large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"}
+
+
+def _local_asr_use_mlx(model_name, args=None):
+    """Python 端本機即時辨識是否改用 mlx-whisper GPU 加速（僅 Apple Silicon）。
+    使用者明確指定 --asr faster-whisper 時尊重其選擇。"""
+    if args is not None and getattr(args, "asr", None) == "faster-whisper":
+        return False
+    if model_name not in _MLX_CAPABLE_MODELS:
+        return False
+    return _is_apple_silicon() and _has_mlx_whisper()
+
+
 def _fw_device_kwargs():
     """faster-whisper WhisperModel 的 device / compute_type 設定。
 
@@ -798,7 +1231,7 @@ ASR_ENGINES = [
     ("moonshine", "Moonshine", "真串流，低延遲，僅英文"),
 ]
 
-APP_VERSION = "2.16.8"
+APP_VERSION = "2.17.0"
 
 # faster-whisper 離線辨識參數（含長音檔幻覺防護）— 標準模式
 # - condition_on_previous_text=False：切斷上一段 prompt 傳染，避免一個短句卡住後幻覺自我強化
@@ -1986,6 +2419,19 @@ def list_audio_devices_sd():
             print(f"  {C_OK}ASR 裝置: WASAPI Loopback ({wb_info['name']}){RESET}")
             return WASAPI_LOOPBACK_ID
 
+    # macOS: 優先用 ScreenCaptureKit（零設定，不需 BlackHole 與多重輸出裝置）
+    if IS_MACOS and _sck_supported():
+        if _sck_permission():
+            print(f"  {C_OK}ASR 裝置: ScreenCaptureKit 系統音訊{RESET}")
+            return SCK_LOOPBACK_ID
+        if _find_blackhole_device() is None:
+            # 沒有 BlackHole 可退，直接引導使用者授權
+            _sck_permission_hint()
+        else:
+            # 有 BlackHole 可退，但仍要讓使用者知道 SCK 沒啟用、以及怎麼啟用
+            print(f"  {C_DIM}[提示] 未取得「螢幕錄製」權限，改用 BlackHole；"
+                  f"授權後即可免設定多重輸出裝置（./start.sh --sck-permission）{RESET}")
+
     devices = sd.query_devices()
     input_devices = []
     for i, dev in enumerate(devices):
@@ -2045,6 +2491,17 @@ def auto_select_device_sd():
         if wb_info:
             print(f"{C_OK}自動選擇音訊裝置: WASAPI Loopback ({wb_info['name']}){RESET}")
             return WASAPI_LOOPBACK_ID
+
+    # macOS: 優先用 ScreenCaptureKit
+    if IS_MACOS and _sck_supported():
+        if _sck_permission():
+            print(f"{C_OK}自動選擇音訊裝置: ScreenCaptureKit 系統音訊{RESET}")
+            return SCK_LOOPBACK_ID
+        if _find_blackhole_device() is None:
+            _sck_permission_hint()
+        else:
+            print(f"{C_DIM}[提示] 未取得「螢幕錄製」權限，改用 BlackHole；"
+                  f"授權後即可免設定多重輸出裝置（./start.sh --sck-permission）{RESET}")
 
     devices = sd.query_devices()
     for i, dev in enumerate(devices):
@@ -4936,14 +5393,7 @@ def run_stream_moonshine(capture_id: int, translator, moonshine_model_name: str,
     transcriber.start()
 
     # 取得音訊裝置資訊
-    if IS_WINDOWS and capture_id == WASAPI_LOOPBACK_ID:
-        wb_info = _find_wasapi_loopback()
-        sd_samplerate = int(wb_info["defaultSampleRate"])
-        sd_channels = min(wb_info["maxInputChannels"], 2)
-    else:
-        dev_info = sd.query_devices(capture_id)
-        sd_samplerate = int(dev_info["default_samplerate"])
-        sd_channels = min(dev_info["max_input_channels"], 2)
+    sd_samplerate, sd_channels = _capture_stream_info(capture_id)
 
     # 建立錄音
     rec_stream = None
@@ -4953,18 +5403,16 @@ def run_stream_moonshine(capture_id: int, translator, moonshine_model_name: str,
         # 錄音裝置與 ASR 裝置可能不同（例如聚集裝置含麥克風+BlackHole）
         use_separate_rec = (rec_device is not None and rec_device != capture_id)
         if use_separate_rec:
-            if IS_WINDOWS and rec_device == WASAPI_MIXED_ID:
-                # Windows 混合錄音（Loopback + 麥克風）
+            if rec_device in (WASAPI_MIXED_ID, SCK_MIXED_ID):
+                # 混合錄音（系統音訊 + 麥克風）
                 _mixed = _setup_mixed_recording(stop_event, meeting_topic)
                 if _mixed:
                     recorder, _mixer, rec_stream, _rec_stream_mic = _mixed
                 else:
-                    # 降級為僅 Loopback
-                    rec_device = WASAPI_LOOPBACK_ID
-            if rec_device == WASAPI_LOOPBACK_ID and IS_WINDOWS:
-                wb_rec = _find_wasapi_loopback()
-                rec_sr = int(wb_rec["defaultSampleRate"])
-                rec_ch = wb_rec["maxInputChannels"]
+                    # 降級為僅系統音訊
+                    rec_device = SCK_LOOPBACK_ID if IS_MACOS else WASAPI_LOOPBACK_ID
+            if _is_sys_audio_device(rec_device):
+                rec_sr, rec_ch = _capture_stream_info(rec_device, cap_channels=None)
                 recorder = _AudioRecorder(rec_sr, rec_ch, topic=meeting_topic, mode=mode)
 
                 def rec_callback(indata, frames, time_info, status):
@@ -4972,9 +5420,9 @@ def run_stream_moonshine(capture_id: int, translator, moonshine_model_name: str,
                         recorder.write_raw(indata)
 
                 try:
-                    rec_stream = _WasapiLoopbackStream(
-                        callback=rec_callback, samplerate=rec_sr,
-                        channels=rec_ch, blocksize=int(rec_sr * 0.1))
+                    rec_stream = _open_capture_stream(
+                        rec_device, rec_callback, rec_sr, rec_ch,
+                        blocksize=int(rec_sr * 0.1))
                 except Exception as e:
                     print(f"{C_HIGHLIGHT}[警告] 無法開啟錄音裝置 [{rec_device}]: {e}{RESET}")
                     print(f"  {C_DIM}跳過錄音，繼續辨識。如需錄音請重啟程式。{RESET}")
@@ -5026,19 +5474,9 @@ def run_stream_moonshine(capture_id: int, translator, moonshine_model_name: str,
             recorder.write(audio)
         transcriber.add_audio(audio.tolist(), sd_samplerate)
 
-    if IS_WINDOWS and capture_id == WASAPI_LOOPBACK_ID:
-        sd_stream = _WasapiLoopbackStream(
-            callback=audio_callback, samplerate=sd_samplerate,
-            channels=sd_channels, blocksize=int(sd_samplerate * 0.1))
-    else:
-        sd_stream = sd.InputStream(
-            device=capture_id,
-            samplerate=sd_samplerate,
-            channels=sd_channels,
-            blocksize=int(sd_samplerate * 0.1),  # 100ms
-            dtype="float32",
-            callback=audio_callback,
-        )
+    sd_stream = _open_capture_stream(
+        capture_id, audio_callback, sd_samplerate, sd_channels,
+        blocksize=int(sd_samplerate * 0.1))  # 100ms
 
     # 清理 flag，防止重複呼叫
     _cleaned_up = [False]
@@ -5209,14 +5647,7 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
         print(f"  {C_HIGHLIGHT}[警告] 模型預熱失敗: {e}（首次辨識可能較慢）{RESET}")
 
     # ── 音訊裝置 ──
-    if IS_WINDOWS and capture_id == WASAPI_LOOPBACK_ID:
-        wb_info = _find_wasapi_loopback()
-        sd_samplerate = int(wb_info["defaultSampleRate"])
-        sd_channels = min(wb_info["maxInputChannels"], 2)
-    else:
-        dev_info = sd.query_devices(capture_id)
-        sd_samplerate = int(dev_info["default_samplerate"])
-        sd_channels = min(dev_info["max_input_channels"], 2)
+    sd_samplerate, sd_channels = _capture_stream_info(capture_id)
     target_sr = 16000
     resample_ratio = sd_samplerate / target_sr  # e.g. 48000/16000 = 3
 
@@ -5230,18 +5661,16 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
     if record:
         use_separate_rec = (rec_device is not None and rec_device != capture_id)
         if use_separate_rec:
-            if IS_WINDOWS and rec_device == WASAPI_MIXED_ID:
-                # Windows 混合錄音（Loopback + 麥克風）
+            if rec_device in (WASAPI_MIXED_ID, SCK_MIXED_ID):
+                # 混合錄音（系統音訊 + 麥克風）
                 _mixed = _setup_mixed_recording(stop_event, meeting_topic)
                 if _mixed:
                     recorder, _mixer, rec_stream, _rec_stream_mic = _mixed
                 else:
-                    # 降級為僅 Loopback
-                    rec_device = WASAPI_LOOPBACK_ID
-            if rec_device == WASAPI_LOOPBACK_ID and IS_WINDOWS:
-                wb_rec = _find_wasapi_loopback()
-                rec_sr = int(wb_rec["defaultSampleRate"])
-                rec_ch = wb_rec["maxInputChannels"]
+                    # 降級為僅系統音訊
+                    rec_device = SCK_LOOPBACK_ID if IS_MACOS else WASAPI_LOOPBACK_ID
+            if _is_sys_audio_device(rec_device):
+                rec_sr, rec_ch = _capture_stream_info(rec_device, cap_channels=None)
                 recorder = _AudioRecorder(rec_sr, rec_ch, topic=meeting_topic, mode=mode)
 
                 def rec_callback(indata, frames, time_info, status):
@@ -5249,9 +5678,9 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
                         recorder.write_raw(indata)
 
                 try:
-                    rec_stream = _WasapiLoopbackStream(
-                        callback=rec_callback, samplerate=rec_sr,
-                        channels=rec_ch, blocksize=int(rec_sr * 0.1))
+                    rec_stream = _open_capture_stream(
+                        rec_device, rec_callback, rec_sr, rec_ch,
+                        blocksize=int(rec_sr * 0.1))
                 except Exception as e:
                     print(f"{C_HIGHLIGHT}[警告] 無法開啟錄音裝置 [{rec_device}]: {e}{RESET}")
                     recorder.close()
@@ -5358,19 +5787,9 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
             ring_write_pos = (ring_write_pos + n) % ring_size
             ring_filled += n
 
-    if IS_WINDOWS and capture_id == WASAPI_LOOPBACK_ID:
-        sd_stream = _WasapiLoopbackStream(
-            callback=audio_callback, samplerate=sd_samplerate,
-            channels=sd_channels, blocksize=int(sd_samplerate * 0.1))
-    else:
-        sd_stream = sd.InputStream(
-            device=capture_id,
-            samplerate=sd_samplerate,
-            channels=sd_channels,
-            blocksize=int(sd_samplerate * 0.1),
-            dtype="float32",
-            callback=audio_callback,
-        )
+    sd_stream = _open_capture_stream(
+        capture_id, audio_callback, sd_samplerate, sd_channels,
+        blocksize=int(sd_samplerate * 0.1))
 
     # ── 降噪 ──
     if denoise:
@@ -5701,11 +6120,15 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
                              length_ms: int = 5000, step_ms: int = 3000,
                              record: bool = False, rec_device: int = None,
                              meeting_topic: str = None,
-                             denoise: bool = False):
-    """Windows 專用：sounddevice/WASAPI 擷取音訊 → 本機 faster-whisper 即時辨識。
-    架構類似 run_stream_remote()，但用本機 faster-whisper 取代遠端 HTTP 上傳。"""
+                             denoise: bool = False,
+                             use_mlx: bool = False):
+    """Python 端本機即時辨識：sounddevice / WASAPI Loopback / ScreenCaptureKit 擷取音訊
+    → 本機 mlx-whisper（Apple Silicon GPU）或 faster-whisper 即時辨識。
+    架構類似 run_stream_remote()，但用本機辨識取代遠端 HTTP 上傳。
+    use_mlx: True 時使用 mlx-whisper GPU 加速（僅 Apple Silicon）"""
     import numpy as np
-    from faster_whisper import WhisperModel
+    if not use_mlx:
+        from faster_whisper import WhisperModel
 
     whisper_lang = "en" if mode in _EN_INPUT_MODES else ("ja" if mode in _JA_INPUT_MODES else "zh")
 
@@ -5720,74 +6143,133 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
     os.makedirs(LOG_DIR, exist_ok=True)
     log_path = os.path.join(LOG_DIR, log_filename)
 
-    # ── 載入 faster-whisper 模型 ──
+    # ── 載入 ASR 模型（mlx-whisper 或 faster-whisper）──
+    fw_model = None        # faster-whisper model（use_mlx=False 時使用）
+    _mlx_repo = None       # mlx-whisper HF repo（use_mlx=True 時使用）
+    _mlx_whisper_mod = None
     _fw_model_sizes = {"large-v3-turbo": "1.6GB", "large-v3": "3.1GB",
                        "medium.en": "1.5GB", "medium": "1.5GB",
                        "small.en": "500MB", "small": "500MB",
                        "base.en": "150MB"}
-    _fw_need_download = False
-    try:
-        # 多路徑搜尋：HuggingFace 快取目錄 + 常見位置
-        _hf_dirs = []
+    if use_mlx:
+        # 在 import 前設定，避免 huggingface_hub 的 tqdm 進度條和 "Fetching N files" 訊息
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        os.environ["TQDM_DISABLE"] = "1"
         try:
-            from huggingface_hub.constants import HF_HUB_CACHE as _hf_cache_dir
-            _hf_dirs.append(_hf_cache_dir)
+            from huggingface_hub.utils import disable_progress_bars as _hf_disable_pb
+            _hf_disable_pb()
         except Exception:
             pass
-        _hf_default = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
-        if _hf_default not in _hf_dirs:
-            _hf_dirs.append(_hf_default)
-        # faster-whisper 不同版本使用不同 HuggingFace 來源
-        _fw_repo_names = [
-            f"models--Systran--faster-whisper-{model_name}",
-            f"models--mobiuslabsgmbh--faster-whisper-{model_name}",
-        ]
-        _fw_found = False
-        for _d in _hf_dirs:
-            for _rn in _fw_repo_names:
-                if os.path.isdir(os.path.join(_d, _rn)):
-                    _fw_found = True
+        import mlx_whisper as _mlx_whisper_mod
+        # MLX 社群 repo 命名不一致：large-v3-turbo 無字尾，其餘需加 -mlx
+        _MLX_REPO_SUFFIX = {"large-v3-turbo": "", "large-v3": "-mlx",
+                            "medium": "-mlx", "small": "-mlx",
+                            "base": "-mlx", "tiny": "-mlx"}
+        _sfx = _MLX_REPO_SUFFIX.get(model_name, "-mlx")
+        _mlx_repo = f"mlx-community/whisper-{model_name}{_sfx}"
+        _mlx_cache_name = f"models--mlx-community--whisper-{model_name}{_sfx}"
+        _mlx_need_download = True
+        try:
+            _hf_dirs = []
+            try:
+                from huggingface_hub.constants import HF_HUB_CACHE as _hf_cache_dir
+                _hf_dirs.append(_hf_cache_dir)
+            except Exception:
+                pass
+            _hf_default = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+            if _hf_default not in _hf_dirs:
+                _hf_dirs.append(_hf_default)
+            for _d in _hf_dirs:
+                if os.path.isdir(os.path.join(_d, _mlx_cache_name)):
+                    _mlx_need_download = False
                     break
-            if _fw_found:
-                break
-        _fw_need_download = not _fw_found
-    except Exception:
-        pass
-    if _fw_need_download:
-        _sz = _fw_model_sizes.get(model_name, "")
-        _sz_hint = f"（約 {_sz}）" if _sz else ""
-        print(f"\n{C_WARN}首次使用 faster-whisper，正在下載模型 ({model_name}){_sz_hint}...{RESET}", flush=True)
-        _webui_send({"type": "progress", "stage": "載入中", "detail": f"下載 faster-whisper 模型（{model_name}）"})
-        print(f"  {C_DIM}faster-whisper 格式與 whisper-stream 的 ggml 格式不同，需另外下載{RESET}")
-        print(f"  {C_DIM}下載完成後會快取，之後不需重新下載{RESET}")
+        except Exception:
+            pass
+        if _mlx_need_download:
+            _sz = _fw_model_sizes.get(model_name, "")
+            _sz_hint = f"（約 {_sz}）" if _sz else ""
+            print(f"\n{C_WARN}首次使用 mlx-whisper，正在下載模型 ({model_name}){_sz_hint}...{RESET}", flush=True)
+            _webui_send({"type": "progress", "stage": "載入中", "detail": f"下載 MLX Whisper 模型（{model_name}）"})
+        else:
+            print(f"\n{C_DIM}正在載入 Whisper 模型 ({model_name}，mlx GPU)...{RESET}", end="", flush=True)
+            _webui_send({"type": "progress", "stage": "載入中", "detail": f"Whisper 模型（{model_name}，mlx GPU）"})
+        t0 = time.monotonic()
+        # 暖機：第一次 transcribe 會編譯 Metal kernel，先用靜音音訊觸發
+        try:
+            import tempfile as _tf
+            _warmup_fd, _warmup_path = _tf.mkstemp(suffix=".wav")
+            os.close(_warmup_fd)
+            with wave.open(_warmup_path, "wb") as _wf:
+                _wf.setnchannels(1)
+                _wf.setsampwidth(2)
+                _wf.setframerate(16000)
+                _wf.writeframes(b"\x00" * 32000)
+            _call_with_ssl_retry(_mlx_whisper_mod.transcribe, _mlx_input(_warmup_path),
+                                 path_or_hf_repo=_mlx_repo, language=whisper_lang)
+            os.unlink(_warmup_path)
+        except Exception:
+            pass
+        if _mlx_need_download:
+            print(f"  {C_OK}模型下載完成（{time.monotonic() - t0:.1f}s）{RESET}")
+        else:
+            print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
     else:
-        print(f"\n{C_DIM}正在載入 Whisper 模型 ({model_name})...{RESET}", end="", flush=True)
-        _webui_send({"type": "progress", "stage": "載入中", "detail": f"Whisper 模型（{model_name}）"})
-    t0 = time.monotonic()
-    import warnings, logging
-    _hf_logger = logging.getLogger("huggingface_hub")
-    _hf_log_level = _hf_logger.level
-    _hf_logger.setLevel(logging.ERROR)
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning)
-        warnings.filterwarnings("ignore", category=FutureWarning)
-        fw_model = _call_with_ssl_retry(WhisperModel, model_name, **_fw_device_kwargs())
-    _hf_logger.setLevel(_hf_log_level)
-    if _fw_need_download:
-        print(f"  {C_OK}模型下載完成（{time.monotonic() - t0:.1f}s）{RESET}")
-    else:
-        print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
+        _fw_need_download = False
+        try:
+            # 多路徑搜尋：HuggingFace 快取目錄 + 常見位置
+            _hf_dirs = []
+            try:
+                from huggingface_hub.constants import HF_HUB_CACHE as _hf_cache_dir
+                _hf_dirs.append(_hf_cache_dir)
+            except Exception:
+                pass
+            _hf_default = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+            if _hf_default not in _hf_dirs:
+                _hf_dirs.append(_hf_default)
+            # faster-whisper 不同版本使用不同 HuggingFace 來源
+            _fw_repo_names = [
+                f"models--Systran--faster-whisper-{model_name}",
+                f"models--mobiuslabsgmbh--faster-whisper-{model_name}",
+            ]
+            _fw_found = False
+            for _d in _hf_dirs:
+                for _rn in _fw_repo_names:
+                    if os.path.isdir(os.path.join(_d, _rn)):
+                        _fw_found = True
+                        break
+                if _fw_found:
+                    break
+            _fw_need_download = not _fw_found
+        except Exception:
+            pass
+        if _fw_need_download:
+            _sz = _fw_model_sizes.get(model_name, "")
+            _sz_hint = f"（約 {_sz}）" if _sz else ""
+            print(f"\n{C_WARN}首次使用 faster-whisper，正在下載模型 ({model_name}){_sz_hint}...{RESET}", flush=True)
+            _webui_send({"type": "progress", "stage": "載入中", "detail": f"下載 faster-whisper 模型（{model_name}）"})
+            print(f"  {C_DIM}faster-whisper 格式與 whisper-stream 的 ggml 格式不同，需另外下載{RESET}")
+            print(f"  {C_DIM}下載完成後會快取，之後不需重新下載{RESET}")
+        else:
+            print(f"\n{C_DIM}正在載入 Whisper 模型 ({model_name})...{RESET}", end="", flush=True)
+            _webui_send({"type": "progress", "stage": "載入中", "detail": f"Whisper 模型（{model_name}）"})
+        t0 = time.monotonic()
+        import warnings, logging
+        _hf_logger = logging.getLogger("huggingface_hub")
+        _hf_log_level = _hf_logger.level
+        _hf_logger.setLevel(logging.ERROR)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            fw_model = _call_with_ssl_retry(WhisperModel, model_name, **_fw_device_kwargs())
+        _hf_logger.setLevel(_hf_log_level)
+        if _fw_need_download:
+            print(f"  {C_OK}模型下載完成（{time.monotonic() - t0:.1f}s）{RESET}")
+        else:
+            print(f" {C_OK}完成（{time.monotonic() - t0:.1f}s）{RESET}")
 
     # ── 音訊裝置 ──
-    if IS_WINDOWS and capture_id == WASAPI_LOOPBACK_ID:
-        wb_info = _find_wasapi_loopback()
-        sd_samplerate = int(wb_info["defaultSampleRate"])
-        sd_channels = min(wb_info["maxInputChannels"], 2)
-    else:
-        import sounddevice as sd
-        dev_info = sd.query_devices(capture_id)
-        sd_samplerate = int(dev_info["default_samplerate"])
-        sd_channels = min(dev_info["max_input_channels"], 2)
+    import sounddevice as sd
+    sd_samplerate, sd_channels = _capture_stream_info(capture_id)
 
     stop_event = threading.Event()
 
@@ -5799,18 +6281,16 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
     if record:
         use_separate_rec = (rec_device is not None and rec_device != capture_id)
         if use_separate_rec:
-            if IS_WINDOWS and rec_device == WASAPI_MIXED_ID:
-                # Windows 混合錄音（Loopback + 麥克風）
+            if rec_device in (WASAPI_MIXED_ID, SCK_MIXED_ID):
+                # 混合錄音（系統音訊 + 麥克風）
                 _mixed = _setup_mixed_recording(stop_event, meeting_topic)
                 if _mixed:
                     recorder, _mixer, rec_stream, _rec_stream_mic = _mixed
                 else:
-                    # 降級為僅 Loopback
-                    rec_device = WASAPI_LOOPBACK_ID
-            if rec_device == WASAPI_LOOPBACK_ID and IS_WINDOWS:
-                wb_rec = _find_wasapi_loopback()
-                rec_sr = int(wb_rec["defaultSampleRate"])
-                rec_ch = wb_rec["maxInputChannels"]
+                    # 降級為僅系統音訊
+                    rec_device = SCK_LOOPBACK_ID if IS_MACOS else WASAPI_LOOPBACK_ID
+            if _is_sys_audio_device(rec_device):
+                rec_sr, rec_ch = _capture_stream_info(rec_device, cap_channels=None)
                 recorder = _AudioRecorder(rec_sr, rec_ch, topic=meeting_topic, mode=mode)
 
                 def rec_callback(indata, frames, time_info, status):
@@ -5818,9 +6298,9 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
                         recorder.write_raw(indata)
 
                 try:
-                    rec_stream = _WasapiLoopbackStream(
-                        callback=rec_callback, samplerate=rec_sr,
-                        channels=rec_ch, blocksize=int(rec_sr * 0.1))
+                    rec_stream = _open_capture_stream(
+                        rec_device, rec_callback, rec_sr, rec_ch,
+                        blocksize=int(rec_sr * 0.1))
                 except Exception as e:
                     print(f"{C_HIGHLIGHT}[警告] 無法開啟錄音裝置 [{rec_device}]: {e}{RESET}")
                     recorder.close()
@@ -5857,7 +6337,8 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
     print(f"{C_TITLE}{'=' * 60}{RESET}")
     print(f"{C_TITLE}{BOLD}  {APP_NAME}{RESET}")
     print(f"{C_TITLE}  {APP_AUTHOR}{RESET}")
-    print(f"  {C_OK}ASR 引擎: Whisper ({model_name}) @ 本機（faster-whisper）{RESET}")
+    _asr_engine_label = "mlx-whisper GPU" if use_mlx else "faster-whisper"
+    print(f"  {C_OK}ASR 引擎: Whisper ({model_name}) @ 本機（{_asr_engine_label}）{RESET}")
     if translator:
         if isinstance(translator, OllamaTranslator):
             _srv_type_label = "Ollama" if translator.server_type == "ollama" else "OpenAI 相容"
@@ -5921,20 +6402,10 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
             ring_write_pos = (ring_write_pos + n) % ring_size
             ring_filled += n
 
-    if IS_WINDOWS and capture_id == WASAPI_LOOPBACK_ID:
-        sd_stream = _WasapiLoopbackStream(
-            callback=audio_callback, samplerate=sd_samplerate,
-            channels=sd_channels, blocksize=int(sd_samplerate * 0.1))
-    else:
-        import sounddevice as sd
-        sd_stream = sd.InputStream(
-            device=capture_id,
-            samplerate=sd_samplerate,
-            channels=sd_channels,
-            blocksize=int(sd_samplerate * 0.1),
-            dtype="float32",
-            callback=audio_callback,
-        )
+    import sounddevice as sd
+    sd_stream = _open_capture_stream(
+        capture_id, audio_callback, sd_samplerate, sd_channels,
+        blocksize=int(sd_samplerate * 0.1))
 
     # ── 降噪 ──
     if denoise:
@@ -5972,18 +6443,55 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
         return tmp_path, rms
 
     # ── 本機 faster-whisper 辨識 ──
+    # initial_prompt 引導 Whisper 輸出風格（繁體中文/日文），顯著提升辨識準確度
+    # 注意：small/base/tiny 模型太弱，會把 prompt 當作辨識結果輸出，故只對 medium 以上啟用
+    _WHISPER_PROMPT = {
+        "zh": "以下是繁體中文語音內容，請使用繁體中文輸出。",
+        "en": None,
+        "ja": "以下は日本語の音声です。",
+    }
+    _PROMPT_CAPABLE_MODELS = {"large-v3-turbo", "large-v3", "medium"}
+    if model_name not in _PROMPT_CAPABLE_MODELS:
+        _WHISPER_PROMPT = {"zh": None, "en": None, "ja": None}
+    # 安全過濾：即使 prompt 洩漏到辨識結果，也會被移除
+    _PROMPT_LEAK_TEXTS = {"以下是繁體中文語音內容", "請使用繁體中文輸出", "請使用繁體中文",
+                          "以下是繁体中文语音内容", "请使用繁体中文输出", "请使用繁体中文",
+                          "以下は日本語の音声です"}
+
     def local_transcribe(wav_path):
-        """用 faster-whisper 辨識 WAV 檔，回傳 (segments_list, full_text, proc_time)"""
+        """用 mlx-whisper / faster-whisper 辨識 WAV 檔，回傳 (segments_list, full_text, proc_time)"""
         t0 = time.monotonic()
-        segments_iter, info = fw_model.transcribe(
-            wav_path, language=whisper_lang, beam_size=5, vad_filter=True)
         segments = []
         texts = []
-        for seg in segments_iter:
-            text = seg.text.strip()
-            if text:
-                segments.append({"start": seg.start, "end": seg.end, "text": text})
-                texts.append(text)
+        if use_mlx:
+            _kw = dict(
+                path_or_hf_repo=_mlx_repo,
+                language=whisper_lang,
+                word_timestamps=False,
+                condition_on_previous_text=False,
+                sample_len=50,
+            )
+            _prompt = _WHISPER_PROMPT.get(whisper_lang)
+            if _prompt:
+                _kw["initial_prompt"] = _prompt
+            result = _mlx_whisper_mod.transcribe(_mlx_input(wav_path), **_kw)
+            for seg in result.get("segments", []):
+                text = seg.get("text", "").strip()
+                # 安全過濾：移除 prompt 洩漏文字
+                for _leak in _PROMPT_LEAK_TEXTS:
+                    text = text.replace(_leak, "")
+                text = text.strip("，。、 ")
+                if text:
+                    segments.append({"start": seg["start"], "end": seg["end"], "text": text})
+                    texts.append(text)
+        else:
+            segments_iter, info = fw_model.transcribe(
+                wav_path, language=whisper_lang, beam_size=5, vad_filter=True)
+            for seg in segments_iter:
+                text = seg.text.strip()
+                if text:
+                    segments.append({"start": seg.start, "end": seg.end, "text": text})
+                    texts.append(text)
         full_text = " ".join(texts)
         proc_time = time.monotonic() - t0
         return segments, full_text, proc_time
@@ -6047,6 +6555,8 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
     _active_transcriptions = [0]
     _active_lock = threading.Lock()
     _MAX_CONCURRENT_TRANSCRIPTIONS = 2
+    # mlx-whisper 的 Metal 推論不可並行，需序列化（與雙向模式同樣策略）
+    _serial_lock = threading.Lock() if use_mlx else None
 
     _slow_warned = [False]
 
@@ -6054,7 +6564,11 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
         with _active_lock:
             _active_transcriptions[0] += 1
         try:
-            segments, full_text, proc_time = local_transcribe(wav_path)
+            if _serial_lock is not None:
+                with _serial_lock:
+                    segments, full_text, proc_time = local_transcribe(wav_path)
+            else:
+                segments, full_text, proc_time = local_transcribe(wav_path)
             with results_lock:
                 pending_results[seq] = (segments, full_text, proc_time)
             # 首次辨識後檢查速度，太慢則建議更小模型
@@ -6218,7 +6732,7 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
             break
     if not _audio_verified:
         print(f"  {C_HIGHLIGHT}[警告] 3 秒內未收到音訊資料{RESET}", flush=True)
-        print(f"  {C_DIM}請確認系統喇叭正在播放聲音，並檢查 WASAPI Loopback 裝置是否正確{RESET}", flush=True)
+        print(f"  {C_DIM}{_no_audio_hint(capture_id)}{RESET}", flush=True)
 
     listen_hints = {
         "en2zh": "說英文即可看到翻譯",
@@ -6421,14 +6935,14 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
             warnings.filterwarnings("ignore", category=UserWarning)
             warnings.filterwarnings("ignore", category=FutureWarning)
             # 用 lb_lang 預熱；若 mic_lang 不同則再預熱一次（避免首次辨識觸發 MLX 重編譯）
-            _call_with_ssl_retry(_mlx_whisper_mod.transcribe, _warmup_path, path_or_hf_repo=_mlx_repo, language=lb_lang)
+            _call_with_ssl_retry(_mlx_whisper_mod.transcribe, _mlx_input(_warmup_path), path_or_hf_repo=_mlx_repo, language=lb_lang)
             if mic_lang is None:
                 # 自動偵測模式：預熱 transcribe（偵測可能用到的語言）
                 _warmup_langs = {"zh", "en"}
                 if mode == "ja_zh":
                     _warmup_langs.add("ja")
                 for _wl in _warmup_langs - {lb_lang}:
-                    _mlx_whisper_mod.transcribe(_warmup_path, path_or_hf_repo=_mlx_repo, language=_wl)
+                    _mlx_whisper_mod.transcribe(_mlx_input(_warmup_path), path_or_hf_repo=_mlx_repo, language=_wl)
                 # 預熱 detect_language + direct_decode 路徑（避免首次辨識觸發 MLX JIT 編譯）
                 import mlx.core as _warmup_mx
                 from mlx_whisper.transcribe import ModelHolder as _WarmupMH
@@ -6462,7 +6976,7 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
                         pass
                 del _w_model, _w_mel, _w_mel_seg, _w_tok, _w_opts
             elif mic_lang != lb_lang:
-                _mlx_whisper_mod.transcribe(_warmup_path, path_or_hf_repo=_mlx_repo, language=mic_lang)
+                _mlx_whisper_mod.transcribe(_mlx_input(_warmup_path), path_or_hf_repo=_mlx_repo, language=mic_lang)
         _hf_logger.setLevel(_hf_log_level)
         # 恢復 HF 進度條設定
         try:
@@ -6541,16 +7055,13 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
 
     # ── 音訊裝置資訊 ──
     import sounddevice as sd
+    lb_sr, lb_ch = _capture_stream_info(lb_device_id)
     if IS_WINDOWS and lb_device_id == WASAPI_LOOPBACK_ID:
-        wb_info = _find_wasapi_loopback()
-        lb_sr = int(wb_info["defaultSampleRate"])
-        lb_ch = min(wb_info["maxInputChannels"], 2)
-        lb_name = wb_info["name"]
+        lb_name = _find_wasapi_loopback()["name"]
+    elif IS_MACOS and lb_device_id == SCK_LOOPBACK_ID:
+        lb_name = "ScreenCaptureKit 系統音訊"
     else:
-        lb_info = sd.query_devices(lb_device_id)
-        lb_sr = int(lb_info["default_samplerate"])
-        lb_ch = min(lb_info["max_input_channels"], 2)
-        lb_name = lb_info["name"]
+        lb_name = sd.query_devices(lb_device_id)["name"]
 
     mic_info = sd.query_devices(mic_device_id)
     mic_sr = int(mic_info["default_samplerate"])
@@ -6701,15 +7212,9 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
             mic_ring_filled += n
 
     # ── 建立音訊串流 ──
-    if IS_WINDOWS and lb_device_id == WASAPI_LOOPBACK_ID:
-        lb_stream = _WasapiLoopbackStream(
-            callback=lb_audio_callback, samplerate=lb_sr,
-            channels=lb_ch, blocksize=int(lb_sr * 0.1))
-    else:
-        lb_stream = sd.InputStream(
-            device=lb_device_id, samplerate=lb_sr, channels=lb_ch,
-            blocksize=int(lb_sr * 0.1), dtype="float32",
-            callback=lb_audio_callback)
+    lb_stream = _open_capture_stream(
+        lb_device_id, lb_audio_callback, lb_sr, lb_ch,
+        blocksize=int(lb_sr * 0.1))
 
     # 注意：mic_stream 故意延後到 lb_stream.start() 之後才建立。
     # macOS CoreAudio 若同時預先建立兩個 InputStream（BlackHole + 內建麥克風），
@@ -6883,7 +7388,7 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
                     # temperature=0 強制單次解碼（不重試），避免 cascade 導致 30s+ 延遲
                     with print_lock:
                         print(f"{C_DIM}  [detect fallback: {_e}]{RESET}", flush=True)
-                    result = _mlx_whisper_mod.transcribe(wav_path,
+                    result = _mlx_whisper_mod.transcribe(_mlx_input(wav_path),
                         path_or_hf_repo=_mlx_repo, language=lang,
                         word_timestamps=False, condition_on_previous_text=False,
                         sample_len=25, temperature=0,
@@ -6927,7 +7432,7 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
             _prompt = _WHISPER_PROMPT.get(lang)
             if _prompt:
                 _kw["initial_prompt"] = _prompt
-            result = _mlx_whisper_mod.transcribe(wav_path, **_kw)
+            result = _mlx_whisper_mod.transcribe(_mlx_input(wav_path), **_kw)
             detected_lang = result.get("language", lang) or lang
             segments = []
             texts = []
@@ -7827,18 +8332,27 @@ class _DualStreamMixer:
 
 
 def _setup_mixed_recording(stop_event, meeting_topic):
-    """建立 Windows 混合錄音（WASAPI Loopback + 麥克風）。
+    """建立混合錄音（系統音訊 + 麥克風）。
+    系統音訊來源：Windows 用 WASAPI Loopback，macOS 用 ScreenCaptureKit。
     回傳 (recorder, mixer, lb_stream, mic_stream) 或 None（失敗時）。"""
     import sounddevice as sd
     import numpy as np
 
-    wb_info = _find_wasapi_loopback()
-    mic_id = _find_default_mic()
-    if not wb_info or mic_id is None:
-        return None
+    if IS_MACOS:
+        lb_device_id = SCK_LOOPBACK_ID
+        mic_id = _find_mac_mic()
+        if not _sck_available() or mic_id is None:
+            return None
+    else:
+        wb_info = _find_wasapi_loopback()
+        lb_device_id = WASAPI_LOOPBACK_ID
+        mic_id = _find_default_mic()
+        if not wb_info or mic_id is None:
+            return None
 
-    lb_sr = int(wb_info["defaultSampleRate"])
-    lb_ch = wb_info["maxInputChannels"]
+    # 錄音路徑保留原始聲道數（Windows 多聲道輸出時，人聲多半在中央聲道，
+    # 截到 2ch 會漏掉；callback 內本來就會自行 downmix 成單聲道）
+    lb_sr, lb_ch = _capture_stream_info(lb_device_id, cap_channels=None)
     mic_info = sd.query_devices(mic_id)
     mic_sr = int(mic_info["default_samplerate"])
 
@@ -7877,11 +8391,12 @@ def _setup_mixed_recording(stop_event, meeting_topic):
         mixer.add_mic(mono)
 
     try:
-        lb_stream = _WasapiLoopbackStream(
-            callback=lb_callback, samplerate=lb_sr,
-            channels=lb_ch, blocksize=int(lb_sr * 0.1))
+        lb_stream = _open_capture_stream(
+            lb_device_id, lb_callback, lb_sr, lb_ch,
+            blocksize=int(lb_sr * 0.1))
     except Exception as e:
-        print(f"{C_HIGHLIGHT}[警告] 無法開啟 WASAPI Loopback 錄音: {e}{RESET}")
+        _lb_label = "ScreenCaptureKit" if IS_MACOS else "WASAPI Loopback"
+        print(f"{C_HIGHLIGHT}[警告] 無法開啟 {_lb_label} 錄音: {e}{RESET}")
         recorder.close()
         return None
 
@@ -7913,6 +8428,15 @@ def _auto_detect_rec_device():
                 return WASAPI_MIXED_ID, f"WASAPI Loopback + {mic_name}", "雙方聲音"
             return WASAPI_LOOPBACK_ID, wb_info["name"], "僅對方聲音"
 
+    # macOS: 優先用 ScreenCaptureKit（不需聚集裝置，有麥克風時用混合模式）
+    if IS_MACOS and _sck_available():
+        mic_id = _find_mac_mic()
+        if mic_id is not None:
+            import sounddevice as sd
+            mic_name = sd.query_devices(mic_id)["name"]
+            return SCK_MIXED_ID, f"ScreenCaptureKit 系統音訊 + {mic_name}", "雙方聲音"
+        return SCK_LOOPBACK_ID, "ScreenCaptureKit 系統音訊", "僅對方聲音"
+
     import sounddevice as sd
     devices = sd.query_devices()
     if IS_MACOS:
@@ -7938,46 +8462,48 @@ def _ask_record_source():
     """純錄音模式：選擇錄音來源（雙方聲音 / 僅對方聲音）。
     回傳 (device_id, device_name, label)，找不到裝置則 sys.exit(1)。"""
     _last_rec = _config.get("last_rec_choice")  # "1"=混合/雙方 / "2"=僅播放/僅對方
-    # Windows: WASAPI Loopback + 麥克風混合
-    if IS_WINDOWS:
-        wb_info = _find_wasapi_loopback()
-        if wb_info:
-            mic_id = _find_default_mic()
-            if mic_id is not None:
-                import sounddevice as sd
-                mic_name = sd.query_devices(mic_id)["name"]
-                lb_name = f"WASAPI Loopback ({wb_info['name']})"
-                mixed_name = f"{lb_name} + {mic_name}"
-                _tag0 = f"  {C_OK}{REVERSE} 前次使用 {RESET}" if _last_rec == "1" else ""
-                _tag1 = f"  {C_OK}{REVERSE} 前次使用 {RESET}" if _last_rec == "2" else ""
-                print(f"\n\n{C_TITLE}{BOLD}▎ 錄音來源{RESET}")
-                print(f"{C_DIM}{'─' * 60}{RESET}")
-                print(f"  {C_HIGHLIGHT}{BOLD}[0] 雙方聲音{RESET}  {C_WHITE}對方播放 + 我方麥克風{RESET}  {C_HIGHLIGHT}{REVERSE} 預設 {RESET}{_tag0}")
-                print(f"  {C_DIM}    {mixed_name}{RESET}")
-                print(f"  {C_DIM}[1]{RESET} {C_WHITE}僅對方聲音{RESET}  {C_DIM}只錄製系統播放的聲音{RESET}{_tag1}")
-                print(f"  {C_DIM}    {lb_name}{RESET}")
-                print(f"{C_DIM}{'─' * 60}{RESET}")
-                print(f"{C_WHITE}選擇 (0-1) [0]：{RESET}", end=" ")
-                try:
-                    user_input = input().strip()
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    sys.exit(0)
-                if user_input == "1":
-                    print(f"  {C_OK}→ 僅對方聲音{RESET}")
-                    if _last_rec != "2":
-                        _config["last_rec_choice"] = "2"
-                        save_config(_config)
-                    return WASAPI_LOOPBACK_ID, wb_info["name"], "僅對方聲音"
-                else:
-                    print(f"  {C_OK}→ 雙方聲音{RESET}")
-                    if _last_rec != "1":
-                        _config["last_rec_choice"] = "1"
-                        save_config(_config)
-                    return WASAPI_MIXED_ID, mixed_name, "雙方聲音"
-            else:
-                print(f"  {C_OK}錄音裝置: WASAPI Loopback ({wb_info['name']}){RESET}")
-                return WASAPI_LOOPBACK_ID, wb_info["name"], "僅對方聲音"
+    # 系統音訊 + 麥克風混合（Windows: WASAPI Loopback，macOS: ScreenCaptureKit）
+    _wb_info = _find_wasapi_loopback() if IS_WINDOWS else None
+    _sys_audio_ok = bool(_wb_info) if IS_WINDOWS else (IS_MACOS and _sck_available())
+    if _sys_audio_ok:
+        lb_name = (f"WASAPI Loopback ({_wb_info['name']})" if IS_WINDOWS
+                   else "ScreenCaptureKit 系統音訊")
+        _lb_id = WASAPI_LOOPBACK_ID if IS_WINDOWS else SCK_LOOPBACK_ID
+        _mixed_id = WASAPI_MIXED_ID if IS_WINDOWS else SCK_MIXED_ID
+        mic_id = _find_default_mic() if IS_WINDOWS else _find_mac_mic()
+        if mic_id is None:
+            print(f"  {C_OK}錄音裝置: {lb_name}{RESET}")
+            return _lb_id, lb_name, "僅對方聲音"
+
+        import sounddevice as sd
+        mic_name = sd.query_devices(mic_id)["name"]
+        mixed_name = f"{lb_name} + {mic_name}"
+        _tag0 = f"  {C_OK}{REVERSE} 前次使用 {RESET}" if _last_rec == "1" else ""
+        _tag1 = f"  {C_OK}{REVERSE} 前次使用 {RESET}" if _last_rec == "2" else ""
+        print(f"\n\n{C_TITLE}{BOLD}▎ 錄音來源{RESET}")
+        print(f"{C_DIM}{'─' * 60}{RESET}")
+        print(f"  {C_HIGHLIGHT}{BOLD}[0] 雙方聲音{RESET}  {C_WHITE}對方播放 + 我方麥克風{RESET}  {C_HIGHLIGHT}{REVERSE} 預設 {RESET}{_tag0}")
+        print(f"  {C_DIM}    {mixed_name}{RESET}")
+        print(f"  {C_DIM}[1]{RESET} {C_WHITE}僅對方聲音{RESET}  {C_DIM}只錄製系統播放的聲音{RESET}{_tag1}")
+        print(f"  {C_DIM}    {lb_name}{RESET}")
+        print(f"{C_DIM}{'─' * 60}{RESET}")
+        print(f"{C_WHITE}選擇 (0-1) [0]：{RESET}", end=" ")
+        try:
+            user_input = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if user_input == "1":
+            print(f"  {C_OK}→ 僅對方聲音{RESET}")
+            if _last_rec != "2":
+                _config["last_rec_choice"] = "2"
+                save_config(_config)
+            return _lb_id, lb_name, "僅對方聲音"
+        print(f"  {C_OK}→ 雙方聲音{RESET}")
+        if _last_rec != "1":
+            _config["last_rec_choice"] = "1"
+            save_config(_config)
+        return _mixed_id, mixed_name, "雙方聲音"
 
     import sounddevice as sd
     devices = sd.query_devices()
@@ -8059,21 +8585,22 @@ def run_record_only(rec_device, topic=None):
     import sounddevice as sd
     import numpy as np
 
-    _is_mixed = IS_WINDOWS and rec_device == WASAPI_MIXED_ID
+    _is_mixed = rec_device in (WASAPI_MIXED_ID, SCK_MIXED_ID)
     _mixer = None
     _mic_stream = None
+    _lb_device_id = SCK_LOOPBACK_ID if IS_MACOS else WASAPI_LOOPBACK_ID
 
     if _is_mixed:
-        # Windows 混合錄音模式：2 個串流（Loopback + Mic），波形顯示 2 行
-        wb_info = _find_wasapi_loopback()
-        rec_sr = int(wb_info["defaultSampleRate"])
-        rec_ch = 2  # 波形顯示用 2 行（Loopback / Mic）
-        dev_name = "WASAPI 混合錄音"
-    elif IS_WINDOWS and rec_device == WASAPI_LOOPBACK_ID:
-        wb_info = _find_wasapi_loopback()
-        rec_sr = int(wb_info["defaultSampleRate"])
-        rec_ch = wb_info["maxInputChannels"]
-        dev_name = f"WASAPI Loopback ({wb_info['name']})"
+        # 混合錄音模式：2 個串流（系統音訊 + Mic），波形顯示 2 行
+        rec_sr, _ = _capture_stream_info(_lb_device_id, cap_channels=None)
+        rec_ch = 2  # 波形顯示用 2 行（系統音訊 / Mic）
+        dev_name = "ScreenCaptureKit 混合錄音" if IS_MACOS else "WASAPI 混合錄音"
+    elif _is_sys_audio_device(rec_device):
+        rec_sr, rec_ch = _capture_stream_info(rec_device, cap_channels=None)
+        if IS_MACOS:
+            dev_name = "ScreenCaptureKit 系統音訊"
+        else:
+            dev_name = f"WASAPI Loopback ({_find_wasapi_loopback()['name']})"
     else:
         dev_info = sd.query_devices(rec_device)
         rec_sr = int(dev_info["default_samplerate"])
@@ -8129,10 +8656,10 @@ def run_record_only(rec_device, topic=None):
                 _ch_histories[1].append(float(np.sqrt(np.mean(mono ** 2))))
 
         try:
-            stream = _WasapiLoopbackStream(
-                callback=lb_callback, samplerate=rec_sr,
-                channels=wb_info["maxInputChannels"],
-                blocksize=int(rec_sr * 0.1))
+            _lb_sr, _lb_ch = _capture_stream_info(_lb_device_id, cap_channels=None)
+            stream = _open_capture_stream(
+                _lb_device_id, lb_callback, _lb_sr, _lb_ch,
+                blocksize=int(_lb_sr * 0.1))
             _mic_stream = sd.InputStream(
                 device=mic_id, samplerate=mic_sr,
                 channels=1, dtype="float32",
@@ -8161,15 +8688,9 @@ def run_record_only(rec_device, topic=None):
                         _ch_histories[c].append(rms)
 
         try:
-            if IS_WINDOWS and rec_device == WASAPI_LOOPBACK_ID:
-                stream = _WasapiLoopbackStream(
-                    callback=rec_callback, samplerate=rec_sr,
-                    channels=rec_ch, blocksize=int(rec_sr * 0.1))
-            else:
-                stream = sd.InputStream(device=rec_device, samplerate=rec_sr,
-                                        channels=rec_ch, dtype="float32",
-                                        blocksize=int(rec_sr * 0.1),
-                                        callback=rec_callback)
+            stream = _open_capture_stream(
+                rec_device, rec_callback, rec_sr, rec_ch,
+                blocksize=int(rec_sr * 0.1))
         except Exception as e:
             print(f"[錯誤] 無法開啟錄音裝置 [{rec_device}] {dev_name}: {e}", file=sys.stderr)
             recorder.close()
@@ -8612,8 +9133,18 @@ def _ask_record(prefer_mix=False):
                 aggregate_name = f"WASAPI Loopback + {mic_name}"
 
     if IS_MACOS:
+        # 0) ScreenCaptureKit（零設定，不需聚集裝置）
+        if _sck_available():
+            loopback_id = SCK_LOOPBACK_ID
+            loopback_name = "ScreenCaptureKit 系統音訊"
+            mic_id = _find_mac_mic()
+            if mic_id is not None:
+                aggregate_id = SCK_MIXED_ID
+                aggregate_name = f"ScreenCaptureKit + {sd.query_devices(mic_id)['name']}"
         # 1) 聚集裝置（macOS 專有）
         for i, dev in enumerate(devices):
+            if aggregate_id is not None:
+                break
             if dev["max_input_channels"] > 0:
                 name = dev["name"]
                 if "聚集" in name or "aggregate" in name.lower():
@@ -12485,6 +13016,12 @@ def parse_args():
         "--list-devices", action="store_true",
         help="列出可用音訊裝置後離開")
     parser.add_argument(
+        "--audio-source", choices=["sck", "blackhole"], metavar="SOURCE",
+        help="macOS 系統音訊來源 (sck / blackhole，預設 sck，未授權時自動退回 blackhole)")
+    parser.add_argument(
+        "--sck-permission", action="store_true",
+        help="macOS 觸發「螢幕錄製」權限授權對話框後離開（ScreenCaptureKit 需要）")
+    parser.add_argument(
         "--record", action="store_true",
         help="即時模式同時錄製音訊為 WAV 檔（存入 recordings/）")
     parser.add_argument(
@@ -12697,6 +13234,26 @@ def _confirm_start(cli_cmd):
 
 def main():
     args = parse_args()
+
+    # macOS ScreenCaptureKit：權限授權 / 來源指定
+    if getattr(args, "sck_permission", False):
+        if not IS_MACOS:
+            print("[錯誤] --sck-permission 僅適用於 macOS", file=sys.stderr)
+            sys.exit(1)
+        if not _sck_macos_ok():
+            print(f"{C_HIGHLIGHT}ScreenCaptureKit 需要 macOS 13.0 以上{RESET}")
+            sys.exit(1)
+        if not _sck_build():
+            sys.exit(1)
+        if _sck_request_permission():
+            print(f"  {C_OK}已取得「螢幕錄製」權限，可直接使用 ScreenCaptureKit 擷取系統音訊{RESET}")
+            sys.exit(0)
+        _sck_permission_hint()
+        sys.exit(1)
+    if getattr(args, "audio_source", None) == "blackhole":
+        global _SCK_FORCE_OFF
+        _SCK_FORCE_OFF = True
+
     cli_mode = (len(sys.argv) > 1 and not args.list_devices
                 and args.summarize is None and not args.input)
 
@@ -13477,6 +14034,18 @@ def main():
         sys.exit(0)
 
     if args.list_devices:
+        if IS_MACOS:
+            print(f"\n\n{C_TITLE}{BOLD}▎ 系統音訊擷取（ScreenCaptureKit）{RESET}")
+            _sck_info = _sck_check(build=False) or {}
+            if not _sck_macos_ok():
+                print(f"  {C_DIM}需要 macOS 13.0 以上，本機為 {_sck_info.get('macos', '未知版本')}{RESET}")
+            elif not _sck_info:
+                print(f"  {C_DIM}元件尚未編譯（執行 {_INSTALL_CMD} 或首次使用時自動編譯）{RESET}")
+            elif _sck_info.get("permission"):
+                print(f"  {C_OK}[{SCK_LOOPBACK_ID}] ScreenCaptureKit 系統音訊{RESET}  {C_DIM}48000Hz 2ch，已授權{RESET}")
+                print(f"  {C_OK}[{SCK_MIXED_ID}] ScreenCaptureKit + 麥克風混合錄音{RESET}")
+            else:
+                print(f"  {C_HIGHLIGHT}[{SCK_LOOPBACK_ID}] ScreenCaptureKit 系統音訊（尚未取得螢幕錄製權限）{RESET}")
         if _MOONSHINE_AVAILABLE:
             print(f"\n\n{C_TITLE}{BOLD}▎ sounddevice 音訊裝置{RESET}")
             list_audio_devices_sd()
@@ -13798,13 +14367,16 @@ def main():
             scene_idx = SCENE_MAP[scene_key]
             _, length_ms, step_ms, _ = SCENE_PRESETS[scene_idx]
 
-            # Windows: 先判斷是否改用 faster-whisper（在 resolve_model 之前）
+            # 先判斷是否改用 Python 端本機辨識（在 resolve_model 之前）
+            # WASAPI Loopback 與 ScreenCaptureKit 都不是 SDL2 裝置，whisper-stream 讀不到
             _cli_use_local_fw = False
             if args.device is not None:
                 capture_id = args.device
-                # WASAPI Loopback 裝置無法用 whisper-stream (SDL2)，改用 faster-whisper
-                if IS_WINDOWS and capture_id == WASAPI_LOOPBACK_ID:
+                if _is_sys_audio_device(capture_id):
                     _cli_use_local_fw = True
+            elif IS_MACOS and _sck_available():
+                capture_id = auto_select_device_sd()
+                _cli_use_local_fw = True
             elif IS_WINDOWS and _find_wasapi_loopback():
                 _, _probe_path = resolve_model("large-v3-turbo")
                 _sdl_devs = _enumerate_sdl_devices(_probe_path)
@@ -13916,7 +14488,8 @@ def main():
                                         length_ms=length_ms, step_ms=step_ms,
                                         record=args.record, rec_device=args.rec_device,
                                         meeting_topic=meeting_topic,
-                                        denoise=args.denoise)
+                                        denoise=args.denoise,
+                                        use_mlx=_local_asr_use_mlx(model_name, args))
             else:
                 run_stream(capture_id, translator, model_name, model_path, length_ms, step_ms, mode,
                            record=args.record, rec_device=args.rec_device,
@@ -14096,8 +14669,13 @@ def main():
             else:
                 asr_engine = "whisper"
 
-            # Windows: Whisper (SDL2) 無法擷取系統音訊，標記改用 faster-whisper
+            # whisper.cpp (SDL2) 讀不到 WASAPI Loopback / ScreenCaptureKit，標記改走 Python 端辨識
             _use_local_fw = False
+            if IS_MACOS and asr_engine == "whisper" and _sck_available():
+                _use_local_fw = True  # 改用 ScreenCaptureKit + mlx/faster-whisper
+                _sck_engine_label = ("mlx-whisper GPU" if (_is_apple_silicon() and _has_mlx_whisper())
+                                     else "faster-whisper")
+                print(f"\n{C_DIM}  系統音訊來源為 ScreenCaptureKit，將改用 {_sck_engine_label} 本機辨識{RESET}")
             if IS_WINDOWS and asr_engine == "whisper" and _find_wasapi_loopback():
                 _, _probe_path = resolve_model("large-v3-turbo")
                 _sdl_devs = _enumerate_sdl_devices(_probe_path)
@@ -14228,7 +14806,7 @@ def main():
                                              denoise=args.denoise,
                                              mic_remote_cfg=_mic_remote)
                 elif _use_local_fw:
-                    # Windows WASAPI + faster-whisper 本機辨識
+                    # WASAPI Loopback / ScreenCaptureKit + 本機辨識（mlx 或 faster-whisper）
                     capture_id = list_audio_devices_sd()
                     _need_llm = mode in _TRANSLATE_MODES and engine == "llm"
                     _cli_kw = dict(mode=mode, model=model_name,
@@ -14244,7 +14822,8 @@ def main():
                                             length_ms=length_ms, step_ms=step_ms,
                                             record=record, rec_device=rec_device,
                                             meeting_topic=meeting_topic,
-                                            denoise=args.denoise)
+                                            denoise=args.denoise,
+                                            use_mlx=_local_asr_use_mlx(model_name, args))
                 else:
                     capture_id = list_audio_devices(model_path)
                     _need_llm = mode in _TRANSLATE_MODES and engine == "llm"

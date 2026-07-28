@@ -51,11 +51,23 @@ try:
         WHISPER_MODELS as _TM_WHISPER_MODELS,
         SUMMARY_MODELS as _TM_SUMMARY_MODELS,
         _recommended_whisper_model as _tm_recommended_whisper_model,
+        SCK_LOOPBACK_ID as _TM_SCK_LOOPBACK_ID,
+        SCK_MIXED_ID as _TM_SCK_MIXED_ID,
+        _sck_check as _tm_sck_check,
+        _sck_macos_ok as _tm_sck_macos_ok,
+        _sck_request_permission as _tm_sck_request_permission,
+        _sck_terminal_app_name as _tm_sck_terminal_app_name,
     )
 except Exception:
     _TM_WHISPER_MODELS = None
     _TM_SUMMARY_MODELS = None
     _tm_recommended_whisper_model = None
+    _TM_SCK_LOOPBACK_ID = -300
+    _TM_SCK_MIXED_ID = -400
+    _tm_sck_check = None
+    _tm_sck_macos_ok = None
+    _tm_sck_request_permission = None
+    _tm_sck_terminal_app_name = None
 
 # ─── 安全設定 ──────────────────────────────────────────────────
 _webui_passwords = {"read": "", "admin": ""}  # 從 config.json 載入
@@ -386,6 +398,24 @@ def _get_config():
     devices = []
     auto_loopback = ""
     auto_mic = ""
+    # macOS ScreenCaptureKit：零設定擷取系統音訊，優先作為預設來源
+    sck = {"supported": False, "permission": False, "macos": "", "app": ""}
+    if sys.platform == "darwin" and _tm_sck_check and _tm_sck_macos_ok:
+        try:
+            if _tm_sck_macos_ok():
+                _info = _tm_sck_check(build=False) or {}
+                sck = {"supported": bool(_info.get("available")),
+                       "permission": bool(_info.get("permission")),
+                       "macos": _info.get("macos", ""),
+                       # 授權對象是啟動 webui.py 的終端機程式，讓前端能直接指名
+                       "app": _tm_sck_terminal_app_name() if _tm_sck_terminal_app_name else ""}
+        except Exception:
+            pass
+    if sck["supported"] and sck["permission"]:
+        devices.append({"id": _TM_SCK_LOOPBACK_ID,
+                        "name": "ScreenCaptureKit 系統音訊（免安裝 BlackHole）",
+                        "channels": 2, "sr": 48000})
+        auto_loopback = f"[{_TM_SCK_LOOPBACK_ID}] ScreenCaptureKit 系統音訊"
     try:
         import sounddevice as sd
         for i, dev in enumerate(sd.query_devices()):
@@ -443,7 +473,8 @@ def _get_config():
         "gpu_host": gpu_host, "summary_descs": summary_descs,
         "recommended_models": recommended_models,
         "default_engine": "llm" if llm_host else "nllb",
-        "last": last, "version": "2.16.8",
+        "sck": sck, "is_macos": sys.platform == "darwin",
+        "last": last, "version": "2.17.0",
         "has_read_pw": bool(_webui_passwords["read"]),
         "has_admin_pw": bool(_webui_passwords["admin"]),
     }
@@ -785,6 +816,24 @@ async def api_upload_file(file: UploadFile = FastFile(...)):
     dest.write_bytes(content)
     size_mb = round(len(content) / 1048576, 1)
     return JSONResponse({"ok": True, "name": dest.name, "size": size_mb, "path": str(dest)})
+
+
+@app.post("/api/sck-permission")
+async def api_sck_permission(request: Request):
+    """macOS：觸發「螢幕錄製」權限授權對話框（ScreenCaptureKit 擷取系統音訊用）"""
+    err = _check_auth(request, "admin")
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=403)
+    if sys.platform != "darwin" or not _tm_sck_request_permission:
+        return JSONResponse({"ok": False, "error": "僅適用於 macOS"})
+    granted = await asyncio.to_thread(_tm_sck_request_permission)
+    if granted:
+        return JSONResponse({"ok": True, "permission": True})
+    return JSONResponse({
+        "ok": False, "permission": False,
+        "error": "尚未授權。請到「系統設定 → 隱私權與安全性 → 螢幕錄製」勾選終端機程式，"
+                 "授權後重新啟動終端機與 WebUI。",
+    })
 
 
 @app.post("/api/test-llm")

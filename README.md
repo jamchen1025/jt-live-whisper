@@ -1,4 +1,4 @@
-# jt-live-whisper v2.16.8
+# jt-live-whisper v2.17.0
 
 **100% 全地端 AI 語音工具集**：即時轉錄、即時翻譯、錄音檔批次處理、講者辨識、會議摘要，所有 AI 模型皆在自有設備上執行，資料不經過任何雲端服務。
 
@@ -9,7 +9,7 @@
 | **目錄** | [核心功能](#核心功能) · [其他特色](#其他特色) · [系統需求](#系統需求) · [快速開始](#快速開始) · [使用方式](#使用方式) · [互動式選單](#互動式選單功能一覽) · [命令列參數](#命令列參數) · [技術架構](#技術架構) · [硬體建議](#硬體建議) · [升級](#升級) |
 |---|---|
 
-核心功能涵蓋即時語音轉錄、中日英即時翻譯字幕、離線音訊檔批次處理、講者辨識（Speaker Diarization）、以及 LLM 會議摘要產出。採用系統音訊裝置層級擷取（macOS 使用 BlackHole，Windows 使用 WASAPI Loopback），**理論上任何軟體的聲音輸出都能即時處理**：視訊會議（Zoom、Teams、Meet）、YouTube、Podcast、串流影片等，不限定特定應用程式。所有 AI 推論皆由地端模型完成，全程不經過第三方雲端 API。
+核心功能涵蓋即時語音轉錄、中日英即時翻譯字幕、離線音訊檔批次處理、講者辨識（Speaker Diarization）、以及 LLM 會議摘要產出。採用系統音訊層級擷取（macOS 使用內建 ScreenCaptureKit，免安裝驅動；Windows 使用 WASAPI Loopback），**理論上任何軟體的聲音輸出都能即時處理**：視訊會議（Zoom、Teams、Meet）、YouTube、Podcast、串流影片等，不限定特定應用程式。所有 AI 推論皆由地端模型完成，全程不經過第三方雲端 API。
 
 Author: Jason Cheng (Jason Tools)
 
@@ -195,7 +195,7 @@ Author: Jason Cheng (Jason Tools)
 - macOS（Apple Silicon / Intel）
 - Python 3.12+
 - [Homebrew](https://brew.sh/)（需事先安裝）
-- [BlackHole 2ch](https://existential.audio/blackhole/)（虛擬音訊驅動，安裝腳本會自動安裝）
+- [BlackHole 2ch](https://existential.audio/blackhole/)（虛擬音訊驅動；**選配**，macOS 12 以下或不使用 ScreenCaptureKit 時才需要，安裝腳本會協助安裝）
 
 **Windows：**
 - Windows 10 以上
@@ -284,9 +284,31 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 ### 2. 設定音訊裝置
 
-#### macOS
+#### macOS（macOS 13 以上：授權一次即可，不必安裝驅動）
+
+預設使用系統內建的 **ScreenCaptureKit** 擷取系統音訊：**不需要安裝 BlackHole、不需要建立多重輸出裝置、不需要重開機，Zoom / Teams 的喇叭與麥克風設定也完全不用改**，喇叭或耳機照常出聲。
+
+唯一需要做的是授權一次「螢幕錄製」權限：
+
+- macOS 把 ScreenCaptureKit 歸類在「螢幕錄製」之下，即使程式只取音訊、不擷取畫面（macOS 15 顯示為「螢幕與系統音訊錄製」）
+- 授權對象是**啟動本程式的終端機程式**（Terminal / iTerm2 / Ghostty / VS Code…），不是 Python。程式會自動判讀並在提示中指名該勾選哪一個
+- 首次執行時會直接詢問是否開啟授權對話框；若曾按過拒絕，會自動開啟系統設定對應頁面
+- **授權後必須用 Cmd+Q 完全結束該終端機程式再重新開啟**，權限才會生效（macOS 的規定）
+- 隨時可執行 `./start.sh --sck-permission` 重新授權；WebUI 設定頁也有授權按鈕
+
+```
+對方說話 → Zoom/Teams → 耳機（你聽到，設定不用改）
+                      → ScreenCaptureKit（程式擷取）→ AI 辨識 → 字幕
+```
+
+> **注意：** 系統設為靜音時，ScreenCaptureKit 只會收到無聲訊號。用耳機聽沒問題，但不要靜音。
+> 錄音想同時錄下自己的聲音，選「系統音訊 + 麥克風」的混合錄音即可，不需要聚集裝置。
+
+<details>
+<summary><b>macOS 12 以下，或不想授權螢幕錄製：改用 BlackHole（點開展開）</b></summary>
 
 安裝 BlackHole 後需要**重新啟動電腦**，然後在「音訊 MIDI 設定」中建立虛擬裝置。
+也可用 `--audio-source blackhole` 強制走此流程。
 
 **3a. 建立「多重輸出裝置」（必要）**
 
@@ -318,6 +340,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ![聚集裝置設定](images/aggregate-device.png)
 
 程式會自動偵測聚集裝置作為錄音裝置，不需要手動選擇。不需要錄音的話可以跳過這步。
+
+</details>
 
 > **提示：** 即時辨識預設處理系統音訊（對方/應用程式的聲音）。加上 `--mic` 參數即可同時轉錄你自己的麥克風語音，或使用雙向模式（`en_zh` / `ja_zh`）自動啟用雙路辨識。
 
@@ -615,7 +639,7 @@ jt-live-whisper/
 
 ```
 即時模式：
-  系統音訊（macOS: BlackHole / Windows: WASAPI Loopback）
+  系統音訊（macOS: ScreenCaptureKit 或 BlackHole / Windows: WASAPI Loopback）
     → 本地端 Whisper / Moonshine AI 語音辨識
       → 本地端 LLM 翻譯（Ollama）/ NLLB / Argos 離線翻譯
         → 終端機即時字幕 + 轉錄記錄檔

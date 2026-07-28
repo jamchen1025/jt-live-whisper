@@ -1,11 +1,11 @@
 # jt-live-whisper 安裝與使用 SOP
 
-即時英翻中字幕系統 v2.16.8 (by Jason Cheng)
+即時英翻中字幕系統 v2.17.0 (by Jason Cheng)
 
 | **目錄** | [系統架構](#一系統架構) · [音訊設定](#二事前準備音訊設定) · [安裝程式](#三安裝程式) · [啟動與使用](#四啟動與使用) · [使用流程總結](#五使用流程總結) · [常見問題](#六常見問題) · [檔案說明](#七檔案說明) · [硬體建議](#硬體建議) |
 |---|---|
 
-將英文語音即時轉錄並翻譯成繁體中文字幕顯示於終端機。採用系統音訊裝置層級擷取（macOS 使用 BlackHole 虛擬音訊裝置，Windows 使用 WASAPI Loopback），**理論上任何軟體的聲音輸出都能即時處理**：視訊會議（Zoom、Teams、Meet）、YouTube、Podcast、串流影片、教育訓練等，不限定特定應用程式。亦可離線處理音訊檔案。
+將英文語音即時轉錄並翻譯成繁體中文字幕顯示於終端機。採用系統音訊層級擷取（macOS 使用內建 ScreenCaptureKit，或 BlackHole 虛擬音訊裝置；Windows 使用 WASAPI Loopback），**理論上任何軟體的聲音輸出都能即時處理**：視訊會議（Zoom、Teams、Meet）、YouTube、Podcast、串流影片、教育訓練等，不限定特定應用程式。亦可離線處理音訊檔案。
 
 適用平台：macOS（Apple Silicon / Intel）/ Windows 10+
 
@@ -28,7 +28,7 @@
 **即時模式：**
 
 ```
-系統音訊（macOS: BlackHole 2ch / Windows: WASAPI Loopback）
+系統音訊（macOS: ScreenCaptureKit 或 BlackHole 2ch / Windows: WASAPI Loopback）
   → 擷取一份音訊給程式（macOS 透過虛擬裝置複製，Windows 直接擷取系統播放）
     → Whisper / Moonshine（即時語音辨識）           ← 本機或 GPU 伺服器
       → LLM（Ollama / OpenAI 相容）/ NLLB / Argos（翻譯）
@@ -95,12 +95,12 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 - **Moonshine**（替代，僅英文）：真串流架構，延遲 ~300ms（僅限本機）
 - **faster-whisper**（離線處理專用）：CTranslate2 引擎，Python API，支援 VAD，可在本機或 GPU 伺服器執行
 
-你仍然可以正常從喇叭或耳機聽到聲音。macOS 的 BlackHole 會額外複製一份音訊給辨識程式；Windows 的 WASAPI Loopback 則直接擷取系統播放的音訊，不需要安裝額外驅動。
+你仍然可以正常從喇叭或耳機聽到聲音。macOS 13 以上使用系統內建的 ScreenCaptureKit 複製一份音訊給辨識程式（只需授權一次「螢幕錄製」，不必安裝驅動）；macOS 12 以下改用 BlackHole 虛擬音訊裝置；Windows 的 WASAPI Loopback 則直接擷取系統播放的音訊，同樣不需要安裝額外驅動。
 
 **目錄結構：**
 
 ```
-realtime_voice_translate/
+jt-live-whisper/
   translate_meeting.py     主程式（即時辨識、離線處理、翻譯、摘要，跨平台）
   webui.py                 WebUI 伺服器（FastAPI + WebSocket，瀏覽器介面後端）
   webui.html               WebUI 前端（單一 HTML，內嵌 CSS/JS）
@@ -125,13 +125,83 @@ realtime_voice_translate/
 
 ### macOS 音訊設定
 
-#### 2-1. 安裝 BlackHole 虛擬音訊驅動
+macOS 有兩種擷取系統音訊的方式，**預設用第一種，不需要安裝任何驅動**：
 
-`./install.sh` 會自動安裝 BlackHole，不需手動執行。
+| 方式 | 適用 | 需要做的事 |
+|---|---|---|
+| **ScreenCaptureKit（預設）** | macOS 13 以上 | 只需授權一次「螢幕錄製」，不必裝驅動、不必重開機、不必改 Zoom/Teams 設定 |
+| BlackHole | macOS 12 以下，或不想授權螢幕錄製 | 安裝驅動 → 重開機 → 建立多重輸出裝置 → 切換系統輸出 |
+
+程式啟動時會自動判斷：macOS 13 以上且已授權就用 ScreenCaptureKit；否則自動退回 BlackHole。
+也可以用 `--audio-source blackhole` 強制指定走 BlackHole。
+
+---
+
+#### 2-1. ScreenCaptureKit 系統音訊（預設方式）
+
+ScreenCaptureKit 是 macOS 內建的擷取機制，程式直接向系統借一份正在播放的音訊，**你的喇叭或耳機照常出聲、音量鍵照常可用**，Zoom / Teams / Meet 的喇叭與麥克風設定通通不用改。
+
+```
+任何應用程式的聲音（Zoom / Teams / Meet / YouTube / Podcast ...）
+  │
+  ├──▶ 你的喇叭 / AirPods / 耳機（照常聽到聲音，設定完全不用改）
+  │
+  └──▶ ScreenCaptureKit（系統複製一份給程式）
+         │
+         ▼
+    jt-live-whisper → AI 語音辨識 → 翻譯 → 終端機即時字幕
+```
+
+安裝時 `./install.sh` 會自動編譯所需的擷取元件（`bin/jt-sck-audio`，約一分鐘），之後原始碼沒變就不會重編。
+
+##### 「螢幕錄製」權限：什麼時候會跳、怎麼處理
+
+**為什麼只取聲音卻要螢幕錄製權限？**
+macOS 把 ScreenCaptureKit 整組歸類在「螢幕錄製」權限之下，即使程式只取音訊、完全不擷取畫面。macOS 15 起這個項目在系統設定裡顯示為 **「螢幕與系統音訊錄製」**。
+
+**授權對象是「你的終端機程式」，不是 Python。**
+macOS 記錄的是啟動本程式的那個 app —— 終端機（Terminal）、iTerm2、Ghostty、Warp、VS Code 等。程式會自動判讀並在提示訊息中**直接指名該勾誰**，不必自己猜。
+
+**權限對話框什麼時候會跳出來：**
+
+| 情況 | 程式的行為 |
+|---|---|
+| 第一次使用、尚未授權 | 終端機互動時直接詢問「現在開啟授權對話框？(Y/n)」，按 Enter 即跳出系統授權視窗 |
+| 曾經按過「拒絕」 | macOS 不會再跳對話框，程式改為自動開啟「系統設定 → 隱私權與安全性 → 螢幕錄製」頁面讓你手動勾選 |
+| 已安裝 BlackHole 但未授權 | 自動改用 BlackHole，並提示「未取得螢幕錄製權限」與啟用方式 |
+| 想主動重新授權 | 隨時執行 `./start.sh --sck-permission` |
+| 使用 WebUI | 設定頁的音訊來源區塊會顯示提示與「開啟授權對話框」按鈕 |
+
+**授權後必須重新啟動終端機程式。**
+這是 macOS 的規定：權限要等該程式重新啟動才會生效。請**完全結束**終端機程式（Cmd+Q，只關視窗不算），再重新開啟並執行一次。
+
+**手動授權步驟（任何時候都可以用）：**
+
+1. 開啟 **「系統設定」→「隱私權與安全性」→「螢幕錄製」**（macOS 15 顯示為「螢幕與系統音訊錄製」）
+2. 在清單中找到你的終端機程式（Terminal / iTerm2 / Ghostty / VS Code…）並打開開關
+3. 若清單中沒有它，先執行一次 `./start.sh --sck-permission` 讓它註冊進清單
+4. 用 Cmd+Q **完全結束**該終端機程式，再重新開啟
+
+##### 常見狀況
+
+- **系統設為靜音就收不到聲音。** ScreenCaptureKit 取的是實際播放出來的音訊，系統靜音時只會收到無聲訊號。用耳機聽沒問題，但不要靜音。
+- **換了終端機程式要重新授權。** 權限綁在 app 上，從 Terminal 換成 iTerm2 等於換了一個對象。
+- **錄音想同時錄下自己的聲音**，選擇「系統音訊 + 麥克風」的混合錄音即可，**不需要**建立聚集裝置。
+
+---
+
+#### 2-2. BlackHole（macOS 12 以下，或不使用 ScreenCaptureKit 時）
+
+> 以下設定只有在 macOS 12 以下、或你選擇不授權螢幕錄製時才需要。
+> macOS 13 以上使用預設的 ScreenCaptureKit 可完全跳過本節。
+
+##### 2-2-1. 安裝 BlackHole 虛擬音訊驅動
+
+`./install.sh` 會協助安裝 BlackHole，不需手動執行。
 
 安裝完成後**必須重新啟動電腦**，BlackHole 才會生效。
 
-#### 2-2. 建立「多重輸出裝置」
+##### 2-2-2. 建立「多重輸出裝置」
 
 BlackHole 2ch 是虛擬音訊裝置，搭配 macOS「多重輸出裝置」將系統音訊同時送給你的耳機/喇叭和本程式，音訊流向如下：
 
@@ -161,7 +231,7 @@ macOS 多重輸出裝置（你建立的）
 
 > **重要：主裝置務必選 BlackHole，不要選耳機/喇叭。** BlackHole 是虛擬裝置，永遠不會斷線。如果主裝置設為藍牙耳機（例如 AirPods），一旦耳機斷線，整個多重輸出裝置會失效，導致 Zoom 等應用程式音訊中斷且無法恢復，必須重建裝置或重開機。
 
-#### 2-3. 設定音訊輸出
+##### 2-2-3. 設定音訊輸出
 
 將系統音訊輸出切換到多重輸出裝置，讓 BlackHole 能收到聲音：
 
@@ -174,9 +244,11 @@ macOS 多重輸出裝置（你建立的）
 
 > **重要：Zoom / Teams 等視訊軟體的喇叭（輸出）也要設成「多重輸出裝置」，不能直接選 AirPods 或喇叭。** 如果直接選 AirPods，聲音不會經過 BlackHole，程式就收不到對方的聲音。麥克風（輸入）維持原本的設定即可，不需要改。
 
-#### 2-4. 建立「聚集裝置」（選配，錄音時需要錄到自己的聲音才需要）
+##### 2-2-4. 建立「聚集裝置」（選配，錄音時需要錄到自己的聲音才需要）
 
-即時轉錄的 ASR 辨識裝置固定使用 BlackHole 2ch（只擷取對方聲音），這樣辨識最準確。但如果你啟用了 `--record` 錄音功能，想要**同時錄下對方和自己的聲音**，就需要建立聚集裝置（Aggregate Device）。
+使用 BlackHole 時，即時轉錄的 ASR 辨識裝置固定使用 BlackHole 2ch（只擷取對方聲音），這樣辨識最準確。但如果你啟用了 `--record` 錄音功能，想要**同時錄下對方和自己的聲音**，就需要建立聚集裝置（Aggregate Device）。
+
+> 使用預設的 ScreenCaptureKit 時不需要本節：直接選擇「系統音訊 + 麥克風」的混合錄音即可。
 
 建立步驟：
 
@@ -222,7 +294,7 @@ macOS 多重輸出裝置（你建立的）
   → 程式同時錄下雙方聲音為 WAV 檔
 ```
 
-#### 2-5. 驗證音訊設定
+##### 2-2-5. 驗證音訊設定
 
 1. 播放一段英文影片或音訊
 2. 確認你的喇叭/耳機有聲音
@@ -305,7 +377,9 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 | cmake | 編譯工具 |
 | sdl2 | 音訊擷取函式庫 |
 | ffmpeg | 音訊轉檔工具（--input 離線處理需要） |
-| BlackHole 2ch | 虛擬音訊驅動 |
+| Xcode Command Line Tools | 提供 swiftc，用於編譯 ScreenCaptureKit 擷取元件（未安裝時執行 `xcode-select --install`） |
+| bin/jt-sck-audio | ScreenCaptureKit 系統音訊擷取元件（安裝時自動編譯，約一分鐘） |
+| BlackHole 2ch | 虛擬音訊驅動（選配，macOS 12 以下或不使用 ScreenCaptureKit 時才需要） |
 | Python 3.12 | Python 執行環境 |
 | whisper.cpp | 即時語音辨識引擎（自動編譯） |
 | whisper 模型 | 語音辨識模型（預設下載 large-v3-turbo） |
@@ -539,7 +613,7 @@ WebUI 需要 fastapi、uvicorn、websockets 套件（安裝腳本已自動安裝
 | `--moonshine-model MODEL` | Moonshine 模型 (medium / small / tiny) | medium |
 | `-s`, `--scene SCENE` | 使用場景 (`meeting` / `training` / `presentation` / `subtitle`)，僅 Whisper 即時模式 | `training` |
 | `--topic TOPIC` | 會議主題（提升翻譯品質，例：`--topic 'ZFS 儲存管理'`）。僅翻譯模式有效 | |
-| `-d`, `--device ID` | 音訊裝置 ID (數字) | 自動偵測 BlackHole (macOS) / WASAPI Loopback (Windows) |
+| `-d`, `--device ID` | 音訊裝置 ID (數字) | 自動偵測 ScreenCaptureKit 或 BlackHole (macOS) / WASAPI Loopback (Windows) |
 | `-e`, `--engine ENGINE` | 翻譯引擎 (llm / argos / nllb) | llm |
 | `--llm-model NAME` | LLM 翻譯模型名稱 | qwen2.5:14b |
 | `--llm-host HOST` | LLM 伺服器位址，自動偵測 Ollama 或 OpenAI 相容 (支援 host:port 格式) | 無（需設定） |
@@ -721,7 +795,7 @@ WebUI 需要 fastapi、uvicorn、websockets 套件（安裝腳本已自動安裝
 
 技術特性：
 
-- 系統音訊走 BlackHole（macOS）或 WASAPI Loopback（Windows），麥克風走預設輸入裝置
+- 系統音訊走 ScreenCaptureKit 或 BlackHole（macOS）、WASAPI Loopback（Windows），麥克風走預設輸入裝置
 - 對方的字幕用 ◀ 符號靠左顯示，自己的字幕用 ▶ 符號縮排顯示，顏色不同方便區分
 - 強制使用 faster-whisper 或 mlx-whisper 多語言模型（如 large-v3-turbo），不支援 .en 模型
 - en_zh 麥克風語言預偵測：每段音訊先以 detect_language 判斷語言（約 0.15 秒），再以正確語言辨識。macOS 使用 mlx-whisper 內部 API 加速（mel 只計算一次）
@@ -987,8 +1061,8 @@ CLI 模式使用 `--topic` 參數指定：
 ```
 
 選擇錄製後，程式會自動偵測錄音裝置，不需要手動選擇：
-- 優先使用聚集裝置（同時錄到對方與自己的聲音，僅 macOS）
-- 找不到聚集裝置時降級使用 BlackHole (macOS) / 系統預設 loopback (Windows)（僅錄對方聲音）
+- 優先使用混合錄音（系統音訊 + 麥克風，同時錄到對方與自己的聲音）或 macOS 聚集裝置
+- 找不到時降級為僅系統音訊（macOS: ScreenCaptureKit 或 BlackHole / Windows: WASAPI Loopback，僅錄對方聲音）
 - 都找不到時才顯示手動選單
 
 程式會在即時辨識的同時錄製音訊。錄音期間以 WAV 格式暫存（每 30 秒更新 header，即使異常終止也能保留音訊），停止時（Ctrl+C）自動轉檔為目標格式並刪除中間 WAV 檔。預設輸出 MP3（近無損品質 VBR ~220-260kbps），可透過 `config.json` 設定為其他格式：
@@ -1003,7 +1077,7 @@ CLI 模式使用 `--topic` 參數指定：
 
 錄音從開始到停止全程錄在同一個檔案，不會自動切檔。錄音檔名含時間戳，例如 `錄音_20260304_143000.mp3`。
 
-選完錄音後，程式會繼續讓你選擇辨識模型和場景，然後自動偵測 ASR 音訊裝置（macOS: BlackHole / Windows: WASAPI Loopback）並開始辨識。
+選完錄音後，程式會繼續讓你選擇辨識模型和場景，然後自動偵測 ASR 音訊裝置（macOS: ScreenCaptureKit 或 BlackHole / Windows: WASAPI Loopback）並開始辨識。
 
 CLI 模式使用 `--record` 參數啟用（自動選錄音裝置），或用 `--rec-device ID` 指定錄音裝置（會自動啟用錄音）。
 
@@ -1449,7 +1523,8 @@ ja_zh 模式輸出：
 ## 六、常見問題
 
 ### Q: 找不到音訊裝置？
-- **macOS：** 確認 BlackHole 2ch 已安裝且電腦已重新啟動。執行 `./install.sh` 檢查。
+- **macOS（ScreenCaptureKit）：** 確認已授權「螢幕錄製」（macOS 15 為「螢幕與系統音訊錄製」）給你的終端機程式，且授權後已完全結束該程式（Cmd+Q）再重新開啟。可執行 `./start.sh --sck-permission` 重新授權。另請確認系統音量未設為靜音——靜音時只會收到無聲訊號。
+- **macOS（BlackHole）：** 確認 BlackHole 2ch 已安裝且電腦已重新啟動。執行 `./install.sh` 檢查。
 - **Windows：** 確認 WASAPI Loopback 裝置可用，或已啟用 Stereo Mix。執行 `.\start.ps1 --list-devices` 檢查可用裝置。
 
 ### Q: 偵測到音訊裝置但沒有辨識到任何語音？
