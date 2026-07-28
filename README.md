@@ -1,4 +1,4 @@
-# jt-live-whisper v2.17.0
+# jt-live-whisper v2.18.0
 
 **100% 全地端 AI 語音工具集**：即時轉錄、即時翻譯、錄音檔批次處理、講者辨識、會議摘要，所有 AI 模型皆在自有設備上執行，資料不經過任何雲端服務。
 
@@ -52,6 +52,7 @@ Author: Jason Cheng (Jason Tools)
 | 語音辨識 (ASR) | **faster-whisper** (CTranslate2) | Windows 即時辨識 + 全平台離線處理，支援 VAD 靜音過濾 |
 | 語音辨識 (ASR) | **mlx-whisper** | Apple Silicon GPU 加速，雙向模式（en_zh / ja_zh）即時辨識專用 |
 | 語音辨識 (ASR) | **Moonshine** (Useful Sensors) | 超低延遲串流辨識模型，英文專用（僅限 Apple Silicon） |
+| 語音辨識 (ASR) | **Breeze-ASR-26** (MediaTek Research) | 台語（台灣閩南語）辨識，Whisper large-v2 微調，直接輸出漢字 |
 | 翻譯 / 摘要 | 搭配自架 LLM 伺服器使用，推薦 **Qwen** / **Phi-4** / **GPT-OSS** 等模型 | 透過地端 Ollama 或其他 LLM 伺服器執行（本機或區域網路），翻譯建議 14B 以上、摘要建議 120B 以上 |
 | 翻譯 (離線) | **NLLB 600M** (Meta) | 離線翻譯模型，支援中日英互譯（`en2zh`/`zh2en`/`ja2zh`/`zh2ja`） |
 | 翻譯 (離線備援) | **Argos Translate** | 完全離線的輕量翻譯模型，僅支援英翻中 |
@@ -127,7 +128,16 @@ Author: Jason Cheng (Jason Tools)
 ![時間逐字稿 HTML](images/offline-transcript.png)
 
 ### 5. 多模式語音轉錄
-10 種功能模式：英翻中 / 中翻英 / 日翻中 / 中翻日 / 英中雙向 / 日中雙向 / 純英文轉錄 / 純中文轉錄 / 純日文轉錄 / 純錄音，滿足各種使用場景。
+12 種功能模式：英翻中 / 中翻英 / 日翻中 / 中翻日 / 英中雙向 / 日中雙向 / 純英文轉錄 / 純中文轉錄 / 純日文轉錄 / **台語轉錄** / **台翻英** / 純錄音，滿足各種使用場景。
+
+**台語（台灣閩南語）支援**：採用 [MediaTek Breeze-ASR-26](https://huggingface.co/MediaTek-Research/Breeze-ASR-26)（Whisper large-v2 的台語微調版，Apache-2.0），辨識結果**直接輸出漢字**，不需另外翻譯。即時與離線皆可用，模型依平台自動選擇（Apple Silicon 用 mlx 4bit 877MB、CPU 用 int8、NVIDIA GPU 用 float16）。
+
+```bash
+./start.sh --mode nan                      # 即時台語字幕
+./start.sh --input 台語錄音.mp3 --mode nan   # 離線台語逐字稿
+```
+
+> 台語模型是 large-v2 微調（decoder 層數約為 large-v3-turbo 的 8 倍），先天較慢：Apple Silicon 約 1.3 倍即時，純 CPU 約 0.24 倍即時（1 小時音訊需約 4 小時），建議搭配 Apple Silicon 或 NVIDIA GPU 使用。
 
 ![即時日翻中字幕畫面（Windows）](images/realtime-ja2zh.png)
 
@@ -511,7 +521,7 @@ cd C:\jt-live-whisper
 | 步驟 | 選單項目 | 選項 | 說明 |
 |------|----------|------|------|
 | 1 | 輸入來源 | 即時語音 / 讀入檔案 | 選擇即時擷取系統音訊或匯入錄音檔離線處理 |
-| 2 | 功能模式 | 英翻中 / 中翻英 / 日翻中 / 中翻日 / 英中雙向 / 日中雙向 / 英文轉錄 / 中文轉錄 / 日文轉錄 / 純錄音 | 10 種模式，分群顯示（單向翻譯、雙向翻譯、轉錄、其他） |
+| 2 | 功能模式 | 英翻中 / 中翻英 / 日翻中 / 中翻日 / 英中雙向 / 日中雙向 / 英文轉錄 / 中文轉錄 / 日文轉錄 / 台語轉錄 / 台翻英 / 純錄音 | 12 種模式，分群顯示（單向翻譯、雙向翻譯、轉錄、其他） |
 | 3 | 麥克風轉錄 | 是 / 否 | 轉錄模式（en/zh/ja）詢問是否同時轉錄麥克風 |
 | 4 | 辨識位置 | GPU 伺服器 / 本機 | 有設定 GPU 伺服器時才顯示 |
 | 5 | ASR 引擎 | Whisper / Moonshine | 英文模式可選 Moonshine（超低延遲），其他語言固定 Whisper |
@@ -527,7 +537,7 @@ cd C:\jt-live-whisper
 
 | 步驟 | 選單項目 | 選項 | 說明 |
 |------|----------|------|------|
-| 1 | 功能模式 | 英文轉錄+中文翻譯 / 中文轉錄+英文翻譯 / 日文轉錄+中文翻譯 / 中文轉錄+日文翻譯 / 英中雙向 / 日中雙向 / 純轉錄 | 9 種模式（不含純錄音） |
+| 1 | 功能模式 | 英文轉錄+中文翻譯 / 中文轉錄+英文翻譯 / 日文轉錄+中文翻譯 / 中文轉錄+日文翻譯 / 英中雙向 / 日中雙向 / 台語轉錄 / 台翻英 / 純轉錄 | 11 種模式（不含純錄音） |
 | 2 | 辨識位置 | GPU 伺服器 / 本機 | GPU 伺服器辨識速度快 5-10 倍 |
 | 3 | 辨識模型 | large-v3-turbo / large-v3 / medium 等 | 依辨識位置推薦模型，伺服器模式顯示快取標籤 |
 | 4 | LLM 伺服器 | host:port | 翻譯模式才詢問，自動偵測伺服器類型 |

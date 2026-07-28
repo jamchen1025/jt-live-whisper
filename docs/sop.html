@@ -55,6 +55,7 @@
       <a class="lv3" href="#4-8-停止">4-8. 停止</a>
       <a class="lv3" href="#4-8---summarize-批次摘要">4-8. --summarize 批次摘要</a>
       <a class="lv3" href="#4-8---input-音訊檔離線處理">4-8. --input 音訊檔離線處理</a>
+      <a class="lv3" href="#4-8-台語台灣閩南語辨識">4-8. 台語（台灣閩南語）辨識</a>
       <a class="lv3" href="#4-9---diarize-講者辨識">4-9. --diarize 講者辨識</a>
       <a class="" href="#五使用流程總結">五、使用流程總結</a>
       <a class="lv3" href="#互動選單流程圖">互動選單流程圖</a>
@@ -92,7 +93,7 @@
   </aside>
   <article class="doc-body md">
 <h1 id="jt-live-whisper-安裝與使用-sop">jt-live-whisper 安裝與使用 SOP</h1>
-<p>即時英翻中字幕系統 v2.17.0 (by Jason Cheng)</p>
+<p>即時英翻中字幕系統 v2.18.0 (by Jason Cheng)</p>
 <table>
 <thead>
 <tr>
@@ -225,6 +226,11 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 <td>僅限 Apple Silicon</td>
 </tr>
 <tr>
+<td>語音辨識 (台語)</td>
+<td><strong>Breeze-ASR-26</strong> (MediaTek Research)</td>
+<td>台語辨識，直接輸出漢字，本機執行</td>
+</tr>
+<tr>
 <td>講者辨識</td>
 <td><strong>resemblyzer</strong> + <strong>spectralcluster</strong></td>
 <td>本機或 GPU 伺服器</td>
@@ -249,6 +255,7 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 <ul>
 <li><strong>Whisper</strong>（推薦，預設）：高準確度，完整斷句，支援中日英文，可在本機或 GPU 伺服器執行</li>
 <li><strong>Moonshine</strong>（替代，僅英文）：真串流架構，延遲 ~300ms（僅限本機）</li>
+<li><strong>Breeze-ASR-26</strong>（台語專用）：MediaTek Research 以 Whisper large-v2 微調，台語語音直接輸出漢字，<code>nan</code> / <code>nan2en</code> 模式自動使用</li>
 <li><strong>faster-whisper</strong>（離線處理專用）：CTranslate2 引擎，Python API，支援 VAD，可在本機或 GPU 伺服器執行</li>
 </ul>
 <p>你仍然可以正常從喇叭或耳機聽到聲音。macOS 13 以上使用系統內建的 ScreenCaptureKit 複製一份音訊給辨識程式（只需授權一次「螢幕錄製」，不必安裝驅動）；macOS 12 以下改用 BlackHole 虛擬音訊裝置；Windows 的 WASAPI Loopback 則直接擷取系統播放的音訊，同樣不需要安裝額外驅動。</p>
@@ -1137,6 +1144,14 @@ cd C:\jt-live-whisper
 <td>日文語音 → 直接顯示日文（不翻譯）</td>
 </tr>
 <tr>
+<td>台語轉錄</td>
+<td>台語（台灣閩南語）語音 → 直接顯示繁體中文</td>
+</tr>
+<tr>
+<td>台翻英字幕</td>
+<td>台語語音 → 翻譯成英文</td>
+</tr>
+<tr>
 <td>純錄音</td>
 <td>僅錄製音訊（不做辨識或翻譯），預設 MP3 格式</td>
 </tr>
@@ -1893,6 +1908,73 @@ cd C:\jt-live-whisper
 [00:10-00:15] ▶ [日] いいえ、よろしくお願いいたします
 </code></pre>
 <p>其中 ◀ 表示系統音訊（對方），▶ 表示麥克風（自己）。配對條件：檔名含「_系統音訊」和「_麥克風」，且時間戳部分相同。</p>
+<h3 id="4-8-台語台灣閩南語辨識">4-8. 台語（台灣閩南語）辨識</h3>
+<p>台語模式使用 <strong>MediaTek Breeze-ASR-26</strong>（Whisper large-v2 的台語微調版，Apache-2.0 授權），
+辨識結果<strong>直接輸出漢字</strong>，不需要再經過翻譯。即時模式與離線處理都可以使用。</p>
+<pre><code class="language-bash">./start.sh --mode nan                        # 即時台語字幕
+./start.sh --mode nan2en                     # 即時台語 → 英文字幕
+./start.sh --input 台語錄音.mp3 --mode nan     # 離線台語逐字稿
+</code></pre>
+<p>也可以在互動式選單的「轉錄」分群選擇「台語轉錄」，或在 WebUI 的功能模式下拉選單選取。</p>
+<h4 id="模型">模型</h4>
+<p>台語模式會自動鎖定 <code>breeze-asr-26</code>，依平台選用社群預先轉檔好的版本，首次使用時自動下載：</p>
+<table>
+<thead>
+<tr>
+<th>平台</th>
+<th>使用的模型</th>
+<th>大小</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>macOS Apple Silicon</td>
+<td><code>doggy8088/Breeze-ASR-26-MLX-4bit</code>（mlx GPU）</td>
+<td>877 MB</td>
+</tr>
+<tr>
+<td>CPU（Windows / Intel Mac / 無 GPU）</td>
+<td><code>WizardForest/faster-whisper-Breeze-ASR-26-int8</code></td>
+<td>1.56 GB</td>
+</tr>
+<tr>
+<td>NVIDIA GPU</td>
+<td><code>paulpengtw/faster-whisper-Breeze-ASR-26</code>（float16）</td>
+<td>3.09 GB</td>
+</tr>
+</tbody></table>
+<p>用 <code>-m</code> 指定其他模型時會顯示提示並忽略——台語只有這個模型可用。</p>
+<h4 id="速度與硬體建議">速度與硬體建議</h4>
+<p>本模型是 Whisper large-v2 的微調版，decoder 層數約為 large-v3-turbo 的 8 倍，先天較慢：</p>
+<table>
+<thead>
+<tr>
+<th>執行方式</th>
+<th>速度（相對即時）</th>
+<th>1 小時音訊約需</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Apple Silicon（mlx 4bit）</td>
+<td>約 1.3 倍即時</td>
+<td>約 45 分鐘</td>
+</tr>
+<tr>
+<td>CPU（CTranslate2 int8）</td>
+<td>約 0.24 倍即時</td>
+<td><strong>約 4 小時</strong></td>
+</tr>
+</tbody></table>
+<ul>
+<li>即時模式的步進會自動拉高到 6 秒下限，避免辨識速度跟不上導致字幕越拖越慢</li>
+<li>純 CPU 機器建議只用離線處理，並預留足夠時間</li>
+<li>台語離線處理固定走本機，不使用 GPU 伺服器（伺服器套用的是一般模型的辨識參數，對本模型反而會大幅劣化）</li>
+</ul>
+<h4 id="已知限制">已知限制</h4>
+<ul>
+<li><strong>辨識結果是華語漢字</strong>，不是台語正字。例如台語的「烏白試」會輸出「亂試」、「我沒咧驚」會輸出「我沒在怕」——語意正確，但用字是華語寫法</li>
+<li><strong>時間戳精細度較低</strong>：本模型訓練時不產生時間戳，程式改用語音活動偵測把音訊切成最長 28 秒的視窗，時間戳取自切段邊界。因此 SRT / VTT 字幕的每一段會比一般模式長，適合定位與對照，不適合逐句字幕</li>
+<li>極短的單詞片段（1～2 秒）容易出現重複幻覺，連續語音的表現明顯較好</li>
+</ul>
 <h3 id="4-9---diarize-講者辨識">4-9. --diarize 講者辨識</h3>
 <p>對音訊檔進行講者辨識，區分不同講者。使用 <strong>resemblyzer</strong>（d-vector 聲紋特徵提取）+ <strong>spectralcluster</strong>（Google 頻譜分群），不需要 HuggingFace token。在 M2 上處理 30 分鐘音訊約 30-60 秒；有 GPU 伺服器設定時自動使用 GPU 伺服器執行，速度可加快到 5-10 秒。伺服器失敗會自動降級本機。</p>
 <p><code>--diarize</code> 需搭配 <code>--input</code> 使用，不適用於即時模式。即時模式無法即時辨識講者，因此建議在即時模式啟用錄音功能（<code>--record</code>），事後再將錄音檔以 <code>--input</code> + <code>--diarize</code> 匯入做講者辨識：</p>

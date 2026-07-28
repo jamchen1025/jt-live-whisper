@@ -60,6 +60,7 @@
           <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>faster-whisper</strong> (CTranslate2)</td><td><span class="zh">Windows 即時辨識 + 全平台離線處理，支援 VAD 靜音過濾</span><span class="en">Windows live + all-platform offline; VAD silence filtering</span></td></tr>
           <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>mlx-whisper</strong></td><td><span class="zh">Apple Silicon GPU 加速，雙向模式（en_zh / ja_zh）即時辨識專用</span><span class="en">Apple Silicon GPU; for bidirectional live modes</span></td></tr>
           <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>Moonshine</strong> (Useful Sensors)</td><td><span class="zh">超低延遲串流辨識模型，英文專用（僅限 Apple Silicon）</span><span class="en">Ultra-low-latency streaming, English only (Apple Silicon)</span></td></tr>
+          <tr><td><span class="zh">語音辨識 (台語)</span><span class="en">ASR (Taiwanese)</span></td><td><strong>Breeze-ASR-26</strong> (MediaTek Research)</td><td><span class="zh">台語（台灣閩南語）辨識，Whisper large-v2 微調，結果直接輸出漢字，不需另外翻譯</span><span class="en">Taiwanese Hokkien ASR fine-tuned from Whisper large-v2; outputs Han characters directly</span></td></tr>
           <tr><td><span class="zh">翻譯 / 摘要</span><span class="en">Translate / summary</span></td><td><span class="zh">自架 LLM 伺服器（推薦 <strong>Qwen</strong> / <strong>Phi-4</strong> / <strong>GPT-OSS</strong>）</span><span class="en">Self-hosted LLM (<strong>Qwen</strong> / <strong>Phi-4</strong> / <strong>GPT-OSS</strong>)</span></td><td><span class="zh">透過地端 Ollama 或其他 LLM 伺服器，翻譯建議 14B 以上、摘要建議 120B 以上</span><span class="en">Via local Ollama or other servers; ≥14B for translation, ≥120B for summaries</span></td></tr>
           <tr><td><span class="zh">翻譯 (離線)</span><span class="en">Translate (offline)</span></td><td><strong>NLLB 600M</strong> (Meta)</td><td><span class="zh">離線翻譯，支援中日英互譯（en2zh / zh2en / ja2zh / zh2ja）</span><span class="en">Offline ZH/JA/EN translation</span></td></tr>
           <tr><td><span class="zh">翻譯 (離線備援)</span><span class="en">Translate (fallback)</span></td><td><strong>Argos Translate</strong></td><td><span class="zh">完全離線的輕量翻譯模型，僅支援英翻中</span><span class="en">Fully offline, lightweight; English→Chinese only</span></td></tr>
@@ -88,6 +89,8 @@
       <div class="mode"><span class="tag">en</span><span><b><span class="zh">純英文轉錄</span><span class="en">English transcription</span></b></span></div>
       <div class="mode"><span class="tag">zh</span><span><b><span class="zh">純中文轉錄</span><span class="en">Chinese transcription</span></b></span></div>
       <div class="mode"><span class="tag">ja</span><span><b><span class="zh">純日文轉錄</span><span class="en">Japanese transcription</span></b></span></div>
+      <div class="mode"><span class="tag">nan</span><span><b><span class="zh">台語轉錄</span><span class="en">Taiwanese (Hokkien)</span></b> <span><span class="zh">直接輸出漢字</span><span class="en">outputs Han characters</span></span></span></div>
+      <div class="mode"><span class="tag">nan2en</span><span><b><span class="zh">台翻英</span><span class="en">Taiwanese → EN</span></b></span></div>
       <div class="mode"><span class="tag">record</span><span><b><span class="zh">純錄音</span><span class="en">Record only</span></b></span></div>
     </div>
     <p class="note" style="margin-top:18px"><span class="zh">所有即時轉錄模式加上 <code>--mic</code> 即可同時轉錄自己的麥克風語音，雙向模式則自動啟用雙路辨識。</span><span class="en">Add <code>--mic</code> to any live transcription mode to also transcribe your microphone; bidirectional modes enable dual-stream automatically.</span></p>
@@ -103,6 +106,7 @@
         <ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.8;color:var(--body)">
           <li><span class="zh"><b>Whisper</b>：高準確度，即時辨識主力</span><span class="en"><b>Whisper</b>: high accuracy, the live default</span></li>
           <li><span class="zh"><b>Moonshine</b>：超低延遲 ~300ms（英文）</span><span class="en"><b>Moonshine</b>: ultra-low latency ~300 ms (English)</span></li>
+          <li><span class="zh"><b>Breeze-ASR-26</b>：台語專用，直接輸出漢字</span><span class="en"><b>Breeze-ASR-26</b>: Taiwanese Hokkien, outputs Han characters</span></li>
           <li><span class="zh"><b>faster-whisper</b>：離線批次處理，支援 VAD 靜音過濾</span><span class="en"><b>faster-whisper</b>: offline batch, with VAD silence filtering</span></li>
         </ul>
       </div>

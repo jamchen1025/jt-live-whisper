@@ -1,6 +1,6 @@
 # jt-live-whisper 安裝與使用 SOP
 
-即時英翻中字幕系統 v2.17.0 (by Jason Cheng)
+即時英翻中字幕系統 v2.18.0 (by Jason Cheng)
 
 | **目錄** | [系統架構](#一系統架構) · [音訊設定](#二事前準備音訊設定) · [安裝程式](#三安裝程式) · [啟動與使用](#四啟動與使用) · [使用流程總結](#五使用流程總結) · [常見問題](#六常見問題) · [檔案說明](#七檔案說明) · [硬體建議](#硬體建議) |
 |---|---|
@@ -85,6 +85,7 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 | 語音辨識 (即時) | **faster-whisper** (CTranslate2) | 本機（Windows 即時 + 全平台離線） |
 | 語音辨識 (即時) | **mlx-whisper** | 僅限 Apple Silicon（雙向模式 GPU 加速） |
 | 語音辨識 (即時) | **Moonshine** (Useful Sensors) | 僅限 Apple Silicon |
+| 語音辨識 (台語) | **Breeze-ASR-26** (MediaTek Research) | 台語辨識，直接輸出漢字，本機執行 |
 | 講者辨識 | **resemblyzer** + **spectralcluster** | 本機或 GPU 伺服器 |
 | 翻譯 / 摘要 | **Qwen 2.5** / **Phi-4** 等 LLM，或搭配使用者自行安裝的模型使用 | 本機或區域網路 LLM 伺服器 |
 | 翻譯 (離線) | **NLLB 600M** (Meta) | 僅限本機 |
@@ -93,6 +94,7 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 語音辨識引擎：
 - **Whisper**（推薦，預設）：高準確度，完整斷句，支援中日英文，可在本機或 GPU 伺服器執行
 - **Moonshine**（替代，僅英文）：真串流架構，延遲 ~300ms（僅限本機）
+- **Breeze-ASR-26**（台語專用）：MediaTek Research 以 Whisper large-v2 微調，台語語音直接輸出漢字，`nan` / `nan2en` 模式自動使用
 - **faster-whisper**（離線處理專用）：CTranslate2 引擎，Python API，支援 VAD，可在本機或 GPU 伺服器執行
 
 你仍然可以正常從喇叭或耳機聽到聲音。macOS 13 以上使用系統內建的 ScreenCaptureKit 複製一份音訊給辨識程式（只需授權一次「螢幕錄製」，不必安裝驅動）；macOS 12 以下改用 BlackHole 虛擬音訊裝置；Windows 的 WASAPI Loopback 則直接擷取系統播放的音訊，同樣不需要安裝額外驅動。
@@ -763,6 +765,8 @@ WebUI 需要 fastapi、uvicorn、websockets 套件（安裝腳本已自動安裝
 | 英文轉錄 | 英文語音 → 直接顯示英文（不翻譯） |
 | 中文轉錄 | 中文語音 → 直接顯示繁體中文（不翻譯） |
 | 日文轉錄 | 日文語音 → 直接顯示日文（不翻譯） |
+| 台語轉錄 | 台語（台灣閩南語）語音 → 直接顯示繁體中文 |
+| 台翻英字幕 | 台語語音 → 翻譯成英文 |
 | 純錄音 | 僅錄製音訊（不做辨識或翻譯），預設 MP3 格式 |
 
 選擇「純錄音」時，跳過 ASR 引擎、翻譯引擎、模型、場景等所有設定，自動偵測錄音裝置後直接開始錄音。錄音期間顯示即時音量波形圖，按 Ctrl+C 停止並儲存。此模式在離線處理（讀入音訊檔案）選單中不會出現。
@@ -1300,6 +1304,50 @@ ja_zh 模式輸出：
 ```
 
 其中 ◀ 表示系統音訊（對方），▶ 表示麥克風（自己）。配對條件：檔名含「_系統音訊」和「_麥克風」，且時間戳部分相同。
+
+### 4-8. 台語（台灣閩南語）辨識
+
+台語模式使用 **MediaTek Breeze-ASR-26**（Whisper large-v2 的台語微調版，Apache-2.0 授權），
+辨識結果**直接輸出漢字**，不需要再經過翻譯。即時模式與離線處理都可以使用。
+
+```bash
+./start.sh --mode nan                        # 即時台語字幕
+./start.sh --mode nan2en                     # 即時台語 → 英文字幕
+./start.sh --input 台語錄音.mp3 --mode nan     # 離線台語逐字稿
+```
+
+也可以在互動式選單的「轉錄」分群選擇「台語轉錄」，或在 WebUI 的功能模式下拉選單選取。
+
+#### 模型
+
+台語模式會自動鎖定 `breeze-asr-26`，依平台選用社群預先轉檔好的版本，首次使用時自動下載：
+
+| 平台 | 使用的模型 | 大小 |
+|------|-----------|------|
+| macOS Apple Silicon | `doggy8088/Breeze-ASR-26-MLX-4bit`（mlx GPU） | 877 MB |
+| CPU（Windows / Intel Mac / 無 GPU） | `WizardForest/faster-whisper-Breeze-ASR-26-int8` | 1.56 GB |
+| NVIDIA GPU | `paulpengtw/faster-whisper-Breeze-ASR-26`（float16） | 3.09 GB |
+
+用 `-m` 指定其他模型時會顯示提示並忽略——台語只有這個模型可用。
+
+#### 速度與硬體建議
+
+本模型是 Whisper large-v2 的微調版，decoder 層數約為 large-v3-turbo 的 8 倍，先天較慢：
+
+| 執行方式 | 速度（相對即時） | 1 小時音訊約需 |
+|----------|----------------|--------------|
+| Apple Silicon（mlx 4bit） | 約 1.3 倍即時 | 約 45 分鐘 |
+| CPU（CTranslate2 int8） | 約 0.24 倍即時 | **約 4 小時** |
+
+- 即時模式的步進會自動拉高到 6 秒下限，避免辨識速度跟不上導致字幕越拖越慢
+- 純 CPU 機器建議只用離線處理，並預留足夠時間
+- 台語離線處理固定走本機，不使用 GPU 伺服器（伺服器套用的是一般模型的辨識參數，對本模型反而會大幅劣化）
+
+#### 已知限制
+
+- **辨識結果是華語漢字**，不是台語正字。例如台語的「烏白試」會輸出「亂試」、「我沒咧驚」會輸出「我沒在怕」——語意正確，但用字是華語寫法
+- **時間戳精細度較低**：本模型訓練時不產生時間戳，程式改用語音活動偵測把音訊切成最長 28 秒的視窗，時間戳取自切段邊界。因此 SRT / VTT 字幕的每一段會比一般模式長，適合定位與對照，不適合逐句字幕
+- 極短的單詞片段（1～2 秒）容易出現重複幻覺，連續語音的表現明顯較好
 
 ### 4-9. --diarize 講者辨識
 

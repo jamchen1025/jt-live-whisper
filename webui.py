@@ -334,6 +334,8 @@ def _get_config():
         {"value": "en", "label": "英文轉錄", "group": "轉錄"},
         {"value": "zh", "label": "中文轉錄", "group": "轉錄"},
         {"value": "ja", "label": "日文轉錄", "group": "轉錄"},
+        {"value": "nan", "label": "台語轉錄", "group": "轉錄"},
+        {"value": "nan2en", "label": "台翻英字幕", "group": "單向翻譯"},
         {"value": "record", "label": "純錄音", "group": "其他"},
     ]
     scenes = [
@@ -474,7 +476,7 @@ def _get_config():
         "recommended_models": recommended_models,
         "default_engine": "llm" if llm_host else "nllb",
         "sck": sck, "is_macos": sys.platform == "darwin",
-        "last": last, "version": "2.17.0",
+        "last": last, "version": "2.18.0",
         "has_read_pw": bool(_webui_passwords["read"]),
         "has_admin_pw": bool(_webui_passwords["admin"]),
     }

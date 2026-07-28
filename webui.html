@@ -460,7 +460,7 @@ let _asrItemsCache=null,_asrLastVal='';
 let _recModels={},_cfgModels=[],_lastModel='';
 function _updateModelRec(mode){
   const recM=_recModels[mode]||'large-v3-turbo';const prev=cselVal($('iModel'));
-  const noEng=['zh','zh2en','zh2ja','ja2zh','ja','en_zh','ja_zh'];
+  const noEng=['zh','zh2en','zh2ja','ja2zh','ja','en_zh','ja_zh','nan','nan2en'];
   const isNoEng=noEng.includes(mode);
   // 模型大小排序（用於判斷效能需求）
   const _mOrder={'base.en':0,'base':1,'small.en':2,'small':3,'large-v3-turbo':4,'large-v3':5};
@@ -478,7 +478,7 @@ function _updateModelRec(mode){
   if(isNoEng&&curVal.endsWith('.en'))cselSetValue($('iModel'),recM);
   else cselSetValue($('iModel'),curVal);
 }
-const _modeLabels={'en2zh':'英翻中字幕','zh2en':'中翻英字幕','ja2zh':'日翻中字幕','zh2ja':'中翻日字幕','en_zh':'英中雙向字幕','ja_zh':'日中雙向字幕','en':'英文轉錄','zh':'中文轉錄','ja':'日文轉錄','record':'純錄音'};
+const _modeLabels={'en2zh':'英翻中字幕','zh2en':'中翻英字幕','ja2zh':'日翻中字幕','zh2ja':'中翻日字幕','en_zh':'英中雙向字幕','ja_zh':'日中雙向字幕','en':'英文轉錄','zh':'中文轉錄','ja':'日文轉錄','nan':'台語轉錄','nan2en':'台翻英字幕','record':'純錄音'};
 const _spkColors=['#ffa550','#64c8ff','#ff96b4','#b4e664','#bea0ff','#fff064','#64f0c8','#ffb4a0'];
 /* Custom Select */
 function cselInit(el){const d=document.createElement('div');d.className='csel-display';d.textContent='選擇...';const dr=document.createElement('div');dr.className='csel-drop';el.appendChild(d);el.appendChild(dr);d.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.csel.open').forEach(s=>{if(s!==el)s.classList.remove('open')});el.classList.toggle('open')})}

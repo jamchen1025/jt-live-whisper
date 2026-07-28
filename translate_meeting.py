@@ -968,6 +968,8 @@ MODE_PRESETS = [
     ("en", "英文轉錄", "英文語音 → 直接顯示英文"),
     ("zh", "中文轉錄", "中文語音 → 直接顯示繁體中文"),
     ("ja", "日文轉錄", "日文語音 → 直接顯示日文"),
+    ("nan", "台語轉錄", "台語語音 → 直接顯示繁體中文（Breeze-ASR-26）"),
+    ("nan2en", "台翻英字幕", "台語語音 → 翻譯成英文"),
     ("record", "純錄音", f"僅錄製音訊為 {RECORDING_FORMAT.upper()} 檔"),
 ]
 
@@ -975,8 +977,10 @@ MODE_PRESETS = [
 _EN_INPUT_MODES = ("en2zh", "en")
 _ZH_INPUT_MODES = ("zh2en", "zh", "zh2ja")
 _JA_INPUT_MODES = ("ja2zh", "ja")
-_TRANSLATE_MODES = ("en2zh", "zh2en", "ja2zh", "zh2ja", "en_zh", "ja_zh")
-_NOENG_MODELS = ("zh", "zh2en", "zh2ja", "ja2zh", "ja", "en_zh", "ja_zh")  # 不能用 .en 模型
+_NAN_INPUT_MODES = ("nan", "nan2en")   # 台語輸入（Breeze-ASR-26 專用，輸出為漢字）
+_TRANSLATE_MODES = ("en2zh", "zh2en", "ja2zh", "zh2ja", "en_zh", "ja_zh", "nan2en")
+_NOENG_MODELS = ("zh", "zh2en", "zh2ja", "ja2zh", "ja", "en_zh", "ja_zh",
+                 "nan", "nan2en")  # 不能用 .en 模型
 _BIDI_MODES = ("en_zh", "ja_zh")  # 雙向翻譯模式（用硬體音訊來源分流）
 _BIDI_LB_DIR = {"en_zh": "en2zh", "ja_zh": "ja2zh"}   # 系統音訊翻譯方向
 _BIDI_MIC_DIR = {"en_zh": "zh2en", "ja_zh": "zh2ja"}  # 麥克風翻譯方向
@@ -992,6 +996,8 @@ _MODE_LABELS = {
     "ja":    (C_JA, "日", C_JA, "日"),
     "en_zh": (C_EN, "EN", C_ZH, "中"),  # 雙向模式 fallback（即時模式用 _BIDI_LABELS）
     "ja_zh": (C_JA, "日", C_ZH, "中"),
+    "nan":    (C_ZH, "台", C_ZH, "台"),   # 台語辨識結果本身即為漢字
+    "nan2en": (C_ZH, "台", C_EN, "EN"),
 }
 
 # 雙向模式標籤（每個方向各一組 src_color, src_label, dst_color, dst_label）
@@ -1036,9 +1042,71 @@ _BIDI_LABELS = {
 
 # 雙向模式語言對照表（模組級，供 process_bidi_audio_files 等使用）
 _LB_LANG = {"en2zh": "en", "zh2en": "zh", "ja2zh": "ja", "zh2ja": "zh",
-            "en": "en", "zh": "zh", "ja": "ja", "en_zh": "en", "ja_zh": "ja"}
+            "en": "en", "zh": "zh", "ja": "ja", "en_zh": "en", "ja_zh": "ja",
+            "nan": "en", "nan2en": "en"}
 _MIC_LANG = {"en2zh": "zh", "zh2en": "en", "ja2zh": "zh", "zh2ja": "ja",
-             "en": "en", "zh": "zh", "ja": "ja", "en_zh": "zh", "ja_zh": "zh"}
+             "en": "en", "zh": "zh", "ja": "ja", "en_zh": "zh", "ja_zh": "zh",
+             "nan": "en", "nan2en": "en"}
+
+# ── 台語辨識模型（MediaTek Breeze-ASR-26，Whisper large-v2 台語微調）────────
+# 直接輸出漢字，不需另外翻譯。以下為社群預先轉檔好的版本，格式與本專案既有引擎相同。
+BREEZE_MODEL = "breeze-asr-26"
+_BREEZE_REPOS = {
+    "mlx":     "doggy8088/Breeze-ASR-26-MLX-4bit",          # Apple Silicon GPU，877MB
+    "fw_int8": "WizardForest/faster-whisper-Breeze-ASR-26-int8",  # CPU，1.56GB
+    "fw_fp16": "paulpengtw/faster-whisper-Breeze-ASR-26",    # CUDA，3.09GB
+}
+# 微調時沿用 Whisper 的 <|en|> 語言 token（見模型 config.json 的 forced_decoder_ids），
+# 傳其他語言會明顯降低品質，故台語模式一律用 "en"。
+_BREEZE_WHISPER_LANG = "en"
+
+
+def _is_nan_mode(mode):
+    """是否為台語輸入模式"""
+    return mode in _NAN_INPUT_MODES
+
+
+def _enforce_nan_model(mode, model_name, quiet=False):
+    """台語模式只有 Breeze-ASR-26 能用；使用者指定其他模型時改回並提示。
+    非台語模式原樣回傳。"""
+    if not _is_nan_mode(mode) or model_name == BREEZE_MODEL:
+        return model_name
+    if not quiet:
+        print(f"  {C_HIGHLIGHT}[提示] 台語模式僅支援 {BREEZE_MODEL}，"
+              f"已忽略指定的 {model_name}{RESET}")
+    return BREEZE_MODEL
+
+
+def _mode_whisper_lang(mode):
+    """依模式決定要傳給 Whisper 的語言代碼"""
+    if mode in _NAN_INPUT_MODES:
+        return _BREEZE_WHISPER_LANG
+    if mode in _EN_INPUT_MODES:
+        return "en"
+    if mode in _JA_INPUT_MODES:
+        return "ja"
+    return "zh"
+
+
+def _resolve_fw_model(model_name, remote=False):
+    """把模型代號轉成 faster-whisper 可載入的名稱或 HF repo。
+    一般模型原樣回傳；台語模型依執行位置選 float16 / int8 版本
+    （GPU 伺服器一律 float16，本機看有沒有 CUDA）。"""
+    if model_name == BREEZE_MODEL:
+        if remote or _fw_local_cuda_ok():
+            return _BREEZE_REPOS["fw_fp16"]
+        return _BREEZE_REPOS["fw_int8"]
+    return model_name
+
+
+def _resolve_mlx_repo(model_name):
+    """把模型代號轉成 mlx-whisper 的 HF repo"""
+    if model_name == BREEZE_MODEL:
+        return _BREEZE_REPOS["mlx"]
+    # MLX 社群 repo 命名不一致：large-v3-turbo 無字尾，其餘需加 -mlx
+    _sfx = {"large-v3-turbo": "", "large-v3": "-mlx", "medium": "-mlx",
+            "small": "-mlx", "base": "-mlx", "tiny": "-mlx"}.get(model_name, "-mlx")
+    return f"mlx-community/whisper-{model_name}{_sfx}"
 
 # 可用的 whisper 模型（由小到大）
 WHISPER_MODELS = [
@@ -1084,7 +1152,8 @@ def _fw_local_cuda_ok():
 
 
 # mlx-community 有對應 repo 的模型（.en 系列不在其中，需退回 faster-whisper）
-_MLX_CAPABLE_MODELS = {"large-v3-turbo", "large-v3", "medium", "small", "base", "tiny"}
+_MLX_CAPABLE_MODELS = {"large-v3-turbo", "large-v3", "medium", "small", "base", "tiny",
+                       BREEZE_MODEL}
 
 
 def _local_asr_use_mlx(model_name, args=None):
@@ -1171,6 +1240,8 @@ def _has_mlx_whisper():
 def _recommended_whisper_model(mode="en2zh"):
     """根據 CPU 架構與核心數推薦此裝置最適合的即時 Whisper 模型。
     Apple Silicon 有 Metal GPU 加速，同核心數效能遠高於 Intel CPU。"""
+    if _is_nan_mode(mode):
+        return BREEZE_MODEL   # 台語只有 Breeze-ASR-26 可用
     cores = os.cpu_count() or 2
     _need_multilang = mode in _NOENG_MODELS
     has_metal = _is_apple_silicon()
@@ -1231,7 +1302,7 @@ ASR_ENGINES = [
     ("moonshine", "Moonshine", "真串流，低延遲，僅英文"),
 ]
 
-APP_VERSION = "2.17.0"
+APP_VERSION = "2.18.0"
 
 # faster-whisper 離線辨識參數（含長音檔幻覺防護）— 標準模式
 # - condition_on_previous_text=False：切斷上一段 prompt 傳染，避免一個短句卡住後幻覺自我強化
@@ -1266,6 +1337,142 @@ _FW_OFFLINE_KW_LOOSE = dict(
     repetition_penalty=1.05,
     word_timestamps=False,
 )
+
+
+# ── 台語（Breeze-ASR-26）專用辨識參數 ─────────────────────────────────────
+# 專案既有的防幻覺參數組（_FW_OFFLINE_KW）對本模型有害：實測同一批台語音檔
+# CER 17.99% → 56.42%、且慢 4.7 倍。原因是該模型微調後 logprob / no_speech
+# 分布與原版 Whisper 不同，門檻持續誤判，temperature fallback 階梯每句都跑完。
+# 另外本模型訓練時被 forced <|notimestamps|>，不產生時間戳 token，
+# 開 vad_filter / word_timestamps 只會拿到錯誤時間（實測第二段 25 秒文字
+# 被標成 0.48 秒），故一律關閉，時間戳改由 _nan_vad_windows() 自行切段取得。
+_FW_NAN_KW = dict(
+    beam_size=5,
+    condition_on_previous_text=False,
+    vad_filter=False,
+    word_timestamps=False,
+)
+
+_NAN_WINDOW_SEC = 28.0       # 每個辨識視窗最長秒數（Whisper 單次上限為 30 秒）
+_NAN_VAD_SILENCE_MS = 500    # 切段用的最短靜音長度
+
+
+_NAN_MIN_STEP_MS = 6000   # 台語即時模式的最短步進
+
+
+def _nan_adjust_step(mode, length_ms, step_ms, quiet=False):
+    """台語即時模式的步進下限。
+
+    Breeze-ASR-26 是 Whisper large-v2 微調（32 層 decoder，約為 turbo 的 8 倍），
+    Apple Silicon 上一段約需 5 秒。步進若短於辨識時間，佇列會無限累積、
+    字幕越拖越慢，因此拉高步進下限，改以稍高的延遲換取穩定。"""
+    if not _is_nan_mode(mode) or step_ms >= _NAN_MIN_STEP_MS:
+        return length_ms, step_ms
+    new_step = _NAN_MIN_STEP_MS
+    new_length = max(length_ms, new_step + 2000)
+    if not quiet:
+        print(f"  {C_DIM}[台語] 辨識較慢，步進 {step_ms}ms → {new_step}ms"
+              f"（緩衝 {length_ms}ms → {new_length}ms）避免字幕越拖越慢{RESET}")
+    return new_length, new_step
+
+
+def _fw_transcribe_kwargs(mode, loose=False):
+    """依模式回傳離線辨識參數組（台語走專用組，其餘維持原本行為）"""
+    if _is_nan_mode(mode):
+        return _FW_NAN_KW
+    return _FW_OFFLINE_KW_LOOSE if loose else _FW_OFFLINE_KW
+
+
+def _nan_vad_windows(audio, samplerate=16000):
+    """把音訊依語音活動切成不超過 _NAN_WINDOW_SEC 的視窗，回傳 [(起, 迄)] 秒。
+
+    Breeze-ASR-26 不會產生時間戳，時間資訊只能由外部切段提供。相鄰語音段
+    會盡量併進同一個視窗，讓總視窗數接近「音訊長度 / 28 秒」，
+    辨識成本與一般模型相當，不會因為切太碎而變慢。
+    偵測不到語音時回傳整段固定切窗，確保不會漏內容。"""
+    total = len(audio) / float(samplerate)
+    try:
+        from faster_whisper.vad import get_speech_timestamps, VadOptions
+        regions = get_speech_timestamps(
+            audio, VadOptions(min_silence_duration_ms=_NAN_VAD_SILENCE_MS),
+            sampling_rate=samplerate)
+    except Exception:
+        regions = []
+
+    if not regions:
+        # 無 VAD 可用（或整段沒偵測到語音）→ 固定長度切窗
+        out, t = [], 0.0
+        while t < total:
+            out.append((t, min(t + _NAN_WINDOW_SEC, total)))
+            t += _NAN_WINDOW_SEC
+        return out or [(0.0, total)]
+
+    windows = []
+    cur_start = cur_end = None
+    for r in regions:
+        rs, re_ = r["start"] / float(samplerate), r["end"] / float(samplerate)
+        if cur_start is None:
+            cur_start, cur_end = rs, re_
+        elif re_ - cur_start <= _NAN_WINDOW_SEC:
+            cur_end = re_                      # 併入目前視窗
+        else:
+            windows.append((cur_start, cur_end))
+            cur_start, cur_end = rs, re_
+        # 單一語音段就超過視窗長度時強制切開，避免超出模型 30 秒上限
+        while cur_end - cur_start > _NAN_WINDOW_SEC:
+            windows.append((cur_start, cur_start + _NAN_WINDOW_SEC))
+            cur_start += _NAN_WINDOW_SEC
+    if cur_start is not None:
+        windows.append((cur_start, cur_end))
+    return windows
+
+
+def _nan_transcribe_windows(model, wav_path, progress_cb=None, use_mlx=False):
+    """台語離線辨識：自行 VAD 切段後逐段辨識，時間戳取自切段邊界。
+
+    Breeze-ASR-26 不產生時間戳 token，直接整檔辨識只會得到「每 30 秒一段」
+    且結束時間錯誤的結果，SRT / VTT / 時間逐字稿全部不可用，因此改由這裡切段。
+    use_mlx=True 時走 mlx-whisper GPU（Apple Silicon 上快約 4 倍）。
+    回傳格式與其他辨識路徑一致：[{"start", "end", "text"}]。"""
+    import numpy as np
+    import wave as _wave
+
+    with _wave.open(wav_path, "r") as wf:
+        sr = wf.getframerate()
+        ch = wf.getnchannels()
+        audio = np.frombuffer(wf.readframes(wf.getnframes()),
+                              dtype=np.int16).astype(np.float32) / 32768.0
+    if ch > 1:
+        audio = audio.reshape(-1, ch).mean(axis=1)
+    if sr != _WHISPER_INPUT_SR:
+        from math import gcd as _gcd
+        from scipy.signal import resample_poly as _resample_poly
+        g = _gcd(int(sr), _WHISPER_INPUT_SR)
+        audio = _resample_poly(audio, _WHISPER_INPUT_SR // g, int(sr) // g)
+    audio = np.ascontiguousarray(audio, dtype=np.float32)
+
+    if use_mlx:
+        import mlx_whisper as _mlx
+        _repo = _resolve_mlx_repo(BREEZE_MODEL)
+
+    out = []
+    for w_start, w_end in _nan_vad_windows(audio, _WHISPER_INPUT_SR):
+        chunk = audio[int(w_start * _WHISPER_INPUT_SR):int(w_end * _WHISPER_INPUT_SR)]
+        if not len(chunk):
+            continue
+        if use_mlx:
+            text = _call_with_ssl_retry(
+                _mlx.transcribe, chunk, path_or_hf_repo=_repo,
+                language=_BREEZE_WHISPER_LANG, condition_on_previous_text=False,
+                word_timestamps=False)["text"].strip()
+        else:
+            segs, _info = model.transcribe(chunk, language=_BREEZE_WHISPER_LANG, **_FW_NAN_KW)
+            text = "".join(x.text for x in segs).strip()
+        if text:
+            out.append({"start": w_start, "end": w_end, "text": text})
+        if progress_cb:
+            progress_cb(w_end)
+    return out
 
 
 def _drop_stuck_segments(segments, loose=False):
@@ -3448,6 +3655,7 @@ def _remote_whisper_transcribe(rw_cfg, wav_path, model, language,
     host = rw_cfg["host"]
     port = rw_cfg.get("whisper_port", REMOTE_WHISPER_DEFAULT_PORT)
     url = f"http://{host}:{port}/v1/audio/transcriptions"
+    model = _resolve_fw_model(model, remote=True)
 
     # multipart/form-data 用 urllib（沿用專案現有模式，不加 requests）
     boundary = f"----jt-whisper-{int(time.monotonic() * 1000)}"
@@ -3593,6 +3801,7 @@ def _remote_whisper_transcribe_bytes(rw_cfg, wav_bytes, model, language, timeout
     host = rw_cfg["host"]
     port = rw_cfg.get("whisper_port", REMOTE_WHISPER_DEFAULT_PORT)
     url = f"http://{host}:{port}/v1/audio/transcriptions"
+    model = _resolve_fw_model(model, remote=True)
 
     boundary = f"----jt-whisper-{int(time.monotonic() * 1000)}"
     body_parts = []
@@ -4638,7 +4847,7 @@ def run_stream(capture_id: int, translator, model_name: str, model_path: str,
                meeting_topic: str = None):
     """啟動 whisper-stream 子程序並即時翻譯輸出"""
 
-    whisper_lang = "en" if mode in _EN_INPUT_MODES else ("ja" if mode in _JA_INPUT_MODES else "zh")
+    whisper_lang = _mode_whisper_lang(mode)
     cmd = [
         WHISPER_STREAM,
         "-m", model_path,
@@ -5586,7 +5795,7 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
     環形緩衝 → 定期上傳 WAV 到伺服器 → 取回結果 → 翻譯顯示"""
     import numpy as np
 
-    whisper_lang = "en" if mode in _EN_INPUT_MODES else ("ja" if mode in _JA_INPUT_MODES else "zh")
+    whisper_lang = _mode_whisper_lang(mode)
 
     # ── 翻譯記錄檔 ──
     from datetime import datetime
@@ -5634,7 +5843,7 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
             wf.setsampwidth(2)
             wf.setframerate(16000)
             wf.writeframes(silence.tobytes())
-        warmup_lang = "en" if mode in _EN_INPUT_MODES else ("ja" if mode in _JA_INPUT_MODES else "zh")
+        warmup_lang = _mode_whisper_lang(mode)
         def _do_warmup():
             return _remote_whisper_transcribe_bytes(
                 remote_cfg, warmup_io.getvalue(),
@@ -6130,7 +6339,7 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
     if not use_mlx:
         from faster_whisper import WhisperModel
 
-    whisper_lang = "en" if mode in _EN_INPUT_MODES else ("ja" if mode in _JA_INPUT_MODES else "zh")
+    whisper_lang = _mode_whisper_lang(mode)
 
     # ── 翻譯記錄檔 ──
     from datetime import datetime
@@ -6162,12 +6371,8 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
             pass
         import mlx_whisper as _mlx_whisper_mod
         # MLX 社群 repo 命名不一致：large-v3-turbo 無字尾，其餘需加 -mlx
-        _MLX_REPO_SUFFIX = {"large-v3-turbo": "", "large-v3": "-mlx",
-                            "medium": "-mlx", "small": "-mlx",
-                            "base": "-mlx", "tiny": "-mlx"}
-        _sfx = _MLX_REPO_SUFFIX.get(model_name, "-mlx")
-        _mlx_repo = f"mlx-community/whisper-{model_name}{_sfx}"
-        _mlx_cache_name = f"models--mlx-community--whisper-{model_name}{_sfx}"
+        _mlx_repo = _resolve_mlx_repo(model_name)
+        _mlx_cache_name = "models--" + _mlx_repo.replace("/", "--")
         _mlx_need_download = True
         try:
             _hf_dirs = []
@@ -6260,7 +6465,7 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             warnings.filterwarnings("ignore", category=FutureWarning)
-            fw_model = _call_with_ssl_retry(WhisperModel, model_name, **_fw_device_kwargs())
+            fw_model = _call_with_ssl_retry(WhisperModel, _resolve_fw_model(model_name), **_fw_device_kwargs())
         _hf_logger.setLevel(_hf_log_level)
         if _fw_need_download:
             print(f"  {C_OK}模型下載完成（{time.monotonic() - t0:.1f}s）{RESET}")
@@ -6882,12 +7087,8 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
             pass
         import mlx_whisper as _mlx_whisper_mod
         # MLX 社群 repo 命名不一致：large-v3-turbo 無字尾，其餘需加 -mlx
-        _MLX_REPO_SUFFIX = {"large-v3-turbo": "", "large-v3": "-mlx",
-                            "medium": "-mlx", "small": "-mlx",
-                            "base": "-mlx", "tiny": "-mlx"}
-        _sfx = _MLX_REPO_SUFFIX.get(model_name, "-mlx")
-        _mlx_repo = f"mlx-community/whisper-{model_name}{_sfx}"
-        _mlx_cache_name = f"models--mlx-community--whisper-{model_name}{_sfx}"
+        _mlx_repo = _resolve_mlx_repo(model_name)
+        _mlx_cache_name = "models--" + _mlx_repo.replace("/", "--")
         # 檢查 HF cache 是否已有模型
         _mlx_need_download = True
         try:
@@ -7046,7 +7247,7 @@ def run_stream_bidirectional(lb_device_id, mic_device_id,
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             warnings.filterwarnings("ignore", category=FutureWarning)
-            fw_model = _call_with_ssl_retry(WhisperModel, model_name, **_fw_device_kwargs())
+            fw_model = _call_with_ssl_retry(WhisperModel, _resolve_fw_model(model_name), **_fw_device_kwargs())
         _hf_logger.setLevel(_hf_log_level)
         if _fw_need_download:
             print(f"  {C_OK}模型下載完成（{time.monotonic() - t0:.1f}s）{RESET}")
@@ -10369,7 +10570,7 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
     else:
         print(f"  {C_OK}轉檔        {RESET}{C_DIM}已是 WAV 格式{RESET}")
 
-    lang = "en" if mode in _EN_INPUT_MODES else ("ja" if mode in _JA_INPUT_MODES else "zh")
+    lang = _mode_whisper_lang(mode)
     need_translate = mode in _TRANSLATE_MODES
 
     # Log 檔名（每次處理建子目錄）
@@ -10388,7 +10589,8 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
     if not os.path.exists(audio_copy):
         shutil.copy2(input_path, audio_copy)
 
-    print(f"  {C_WHITE}辨識語言    {lang}{RESET}")
+    _lang_disp = "台語（Breeze-ASR-26，輸出漢字）" if _is_nan_mode(mode) else lang
+    print(f"  {C_WHITE}辨識語言    {_lang_disp}{RESET}")
     print(f"  {C_DIM}記錄檔      {os.path.relpath(session_dir)}/{RESET}")
     _webui_send({"type": "progress", "stage": "準備中", "detail": os.path.basename(input_path)})
 
@@ -10425,6 +10627,12 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
     t_stage = time.monotonic()
     used_remote = False
     raw_segments = None  # 伺服器回傳的 segments list
+
+    if remote_whisper_cfg is not None and _is_nan_mode(mode):
+        # 台語走本機：伺服器端套用的是一般模型的防幻覺參數組，對 Breeze-ASR-26
+        # 反而大幅劣化（實測 CER 17.99% → 56.42%），且時間戳需由用戶端切段產生
+        print(f"  {C_DIM}[台語] 改用本機辨識（GPU 伺服器的辨識參數不適用本模型）{RESET}")
+        remote_whisper_cfg = None
 
     if remote_whisper_cfg is not None:
         rw_host = remote_whisper_cfg.get("host", "?")
@@ -10479,8 +10687,14 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
                   file=sys.stderr)
             return None, None, None
 
-        print(f"  {C_WHITE}載入模型    {model_size}...{RESET}", end=" ", flush=True)
-        model = _call_with_ssl_retry(WhisperModel, model_size, **_fw_device_kwargs())
+        # 台語在 Apple Silicon 上走 mlx-whisper GPU（實測比 CTranslate2 CPU 快約 4 倍）
+        _nan_mlx = _is_nan_mode(mode) and _is_apple_silicon() and _has_mlx_whisper()
+        _engine_label = "mlx-whisper GPU" if _nan_mlx else "faster-whisper"
+        print(f"  {C_WHITE}載入模型    {model_size}（{_engine_label}）...{RESET}", end=" ", flush=True)
+        model = None
+        if not _nan_mlx:
+            model = _call_with_ssl_retry(WhisperModel, _resolve_fw_model(model_size),
+                                         **_fw_device_kwargs())
         print(f"{C_OK}✓{RESET}")
         print(f"  {C_WHITE}辨識中...{RESET}\n")
         _webui_send({"type": "progress", "stage": "辨識中", "detail": f"本機 {model_size}"})
@@ -10489,31 +10703,39 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
         if audio_duration > 0:
             sbar.set_progress("0%")
 
-        _kw = _FW_OFFLINE_KW_LOOSE if use_loose else _FW_OFFLINE_KW
-        segments_iter, info = model.transcribe(asr_wav_path, language=lang, **_kw)
-
-        # 將 generator 轉為 list of dict（與伺服器格式統一）
-        raw_segments = []
-        for segment in segments_iter:
+        def _sbar_progress(pos_sec):
             if audio_duration > 0:
-                pct = min(segment.end / audio_duration, 1.0)
-                pos_m, pos_s = divmod(int(segment.end), 60)
+                pct = min(pos_sec / audio_duration, 1.0)
+                pos_m, pos_s = divmod(int(pos_sec), 60)
                 dur_m, dur_s = divmod(int(audio_duration), 60)
-                sbar.set_progress(
-                    f"{pct:.0%}  {pos_m}:{pos_s:02d} / {dur_m}:{dur_s:02d}"
-                )
-            text = segment.text.strip()
-            if text:
-                raw_segments.append({
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": text,
-                })
+                sbar.set_progress(f"{pct:.0%}  {pos_m}:{pos_s:02d} / {dur_m}:{dur_s:02d}")
 
-        # 主動釋放 ASR 模型參考（搭配 finally 的 gc + cuda.empty_cache()）
-        # 這條路徑使用本機 faster-whisper，模型與 generator 用完即刪除
-        try: del segments_iter, info, model
-        except NameError: pass
+        raw_segments = []
+        if _is_nan_mode(mode):
+            # 台語：模型不產生時間戳，改由自行 VAD 切段取得時間資訊
+            raw_segments = _nan_transcribe_windows(model, asr_wav_path, _sbar_progress,
+                                                   use_mlx=_nan_mlx)
+            try: del model
+            except NameError: pass
+        else:
+            _kw = _fw_transcribe_kwargs(mode, use_loose)
+            segments_iter, info = model.transcribe(asr_wav_path, language=lang, **_kw)
+
+            # 將 generator 轉為 list of dict（與伺服器格式統一）
+            for segment in segments_iter:
+                _sbar_progress(segment.end)
+                text = segment.text.strip()
+                if text:
+                    raw_segments.append({
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": text,
+                    })
+
+            # 主動釋放 ASR 模型參考（搭配 finally 的 gc + cuda.empty_cache()）
+            # 這條路徑使用本機 faster-whisper，模型與 generator 用完即刪除
+            try: del segments_iter, info, model
+            except NameError: pass
 
     # 清理增益暫存檔（辨識結束後）
     if _boosted and asr_wav_path != wav_path:
@@ -10946,7 +11168,7 @@ def process_bidi_audio_files(lb_path, mic_path, mode, translator_lb, translator_
                 return [], _loose
 
             print(f"  {C_WHITE}{label} 載入模型 {model_size}...{RESET}", end=" ", flush=True)
-            model = _call_with_ssl_retry(WhisperModel, model_size, **_fw_device_kwargs())
+            model = _call_with_ssl_retry(WhisperModel, _resolve_fw_model(model_size), **_fw_device_kwargs())
             print(f"{C_OK}✓{RESET}")
 
             sbar = _SummaryStatusBar(model=model_size, task=f"{label} 辨識中", asr_location="本機").start()
@@ -13421,7 +13643,7 @@ def main():
             do_summarize = args.summarize is not None
             summary_mode = "both" if do_summarize else "correct_only"  # 有 --summarize 才產摘要，否則只校正
             _default_fw = "large-v3" if (mode in _NOENG_MODELS and (REMOTE_WHISPER_CONFIG or _has_local_gpu())) else "large-v3-turbo"
-            fw_model = args.model or _default_fw
+            fw_model = _enforce_nan_model(mode, args.model or _default_fw)
             host, port = _resolve_ollama_host(args)
             server_type = None  # CLI 模式稍後偵測
             need_translate_cli = mode in _TRANSLATE_MODES
@@ -14098,7 +14320,7 @@ def main():
             print(f"  {C_OK}麥克風:   {_bidi_mic_name}{RESET}")
 
             # 模型
-            model_name = args.model or _recommended_whisper_model(mode)
+            model_name = _enforce_nan_model(mode, args.model or _recommended_whisper_model(mode))
             if model_name.endswith(".en"):
                 print(f"[錯誤] 雙向模式不支援 {model_name}（僅英文模型），請用多語言模型", file=sys.stderr)
                 sys.exit(1)
@@ -14140,6 +14362,7 @@ def main():
             scene_key = args.scene or "training"
             scene_idx = SCENE_MAP[scene_key]
             _, length_ms, step_ms, _ = SCENE_PRESETS[scene_idx]
+            length_ms, step_ms = _nan_adjust_step(mode, length_ms, step_ms)
 
             mode_label = next(name for k, name, _ in MODE_PRESETS if k == mode)
             _fw_label = "mlx-whisper GPU" if _use_mlx_bidi else "faster-whisper"
@@ -14244,6 +14467,7 @@ def main():
             scene_key = args.scene or "training"
             scene_idx = SCENE_MAP[scene_key]
             _, length_ms, step_ms, _ = SCENE_PRESETS[scene_idx]
+            length_ms, step_ms = _nan_adjust_step(mode, length_ms, step_ms)
 
             rw_host = REMOTE_WHISPER_CONFIG.get("host", "?")
             mode_label = next(name for k, name, _ in MODE_PRESETS if k == mode)
@@ -14356,7 +14580,7 @@ def main():
         else:
             check_dependencies(asr_engine)
             # Whisper 本機模式（原有邏輯）
-            default_model = args.model or _recommended_whisper_model(mode)
+            default_model = _enforce_nan_model(mode, args.model or _recommended_whisper_model(mode))
             model_name = default_model
             if mode in _NOENG_MODELS and model_name.endswith(".en"):
                 print(f"[錯誤] {mode} 模式不支援 {model_name}（僅英文模型），請用 small、medium、large-v3-turbo 或 large-v3",
@@ -14366,10 +14590,12 @@ def main():
             scene_key = args.scene or "training"
             scene_idx = SCENE_MAP[scene_key]
             _, length_ms, step_ms, _ = SCENE_PRESETS[scene_idx]
+            length_ms, step_ms = _nan_adjust_step(mode, length_ms, step_ms)
 
             # 先判斷是否改用 Python 端本機辨識（在 resolve_model 之前）
             # WASAPI Loopback 與 ScreenCaptureKit 都不是 SDL2 裝置，whisper-stream 讀不到
-            _cli_use_local_fw = False
+            # 台語只有 Breeze-ASR-26，whisper.cpp 沒有對應的 ggml 模型，一律走 Python 端
+            _cli_use_local_fw = _is_nan_mode(mode)
             if args.device is not None:
                 capture_id = args.device
                 if _is_sys_audio_device(capture_id):
