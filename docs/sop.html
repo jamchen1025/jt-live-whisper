@@ -228,7 +228,7 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 <tr>
 <td>翻譯 (LLM)</td>
 <td>自架 LLM 伺服器，預設 <strong>qwen2.5:14b</strong></td>
-<td>即時與離線翻譯；建議 14B 以上，本機或區域網路 LLM 伺服器</td>
+<td>即時與離線翻譯（本機或區域網路 LLM 伺服器）；建議 14B 以上，並<strong>選用不會思考的模型</strong>——程式雖會自動關閉 Ollama 的思考模式，但 gpt-oss 系列架構上必定推理、關不掉，用於即時翻譯會明顯變慢</td>
 </tr>
 <tr>
 <td>摘要 / 逐字稿校正 (LLM)</td>
@@ -927,7 +927,7 @@ cd C:\jt-live-whisper
 </tr>
 <tr>
 <td><code>--llm-model NAME</code></td>
-<td>LLM 翻譯模型名稱</td>
+<td>LLM 翻譯模型名稱（建議選用不會思考的模型，見下方說明）</td>
 <td>qwen2.5:14b</td>
 </tr>
 <tr>
@@ -1532,6 +1532,9 @@ cd C:\jt-live-whisper
 <td>qwen2.5:14b 的翻譯時間</td>
 </tr>
 </tbody></table>
+<blockquote>
+<p><strong>翻譯模型請選用不會思考的模型。</strong> 具思考能力的模型（qwen3 / gemma4 / deepseek-r1 等）在翻譯每一句前都會先產生大量推理內容，即時字幕會慢到無法使用。程式已會自動對 Ollama 關閉思考模式（v2.16.8 起），但 <strong>gpt-oss 系列架構上必定推理、關不掉</strong>，僅適合用於不吃即時性的摘要，不要拿來做即時翻譯。</p>
+</blockquote>
 <p>各場景的預估總延遲（以 large-v3-turbo + LLM 翻譯為例）：</p>
 <table>
 <thead>

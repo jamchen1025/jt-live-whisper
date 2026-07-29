@@ -85,7 +85,7 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 | 語音辨識 | **Breeze-ASR-26** (MediaTek Research) | **台語（台灣閩南語）專用**，Whisper large-v2 微調，結果直接輸出漢字，不需另外翻譯 |
 | 語音辨識 | **Moonshine** (Useful Sensors) | **英文專用**，超低延遲串流辨識模型（僅限 Apple Silicon） |
 | 講者辨識 | **resemblyzer** + **spectralcluster** | 聲紋特徵提取 + 頻譜分群，可在本機或 GPU 伺服器執行 |
-| 翻譯 (LLM) | 自架 LLM 伺服器，預設 **qwen2.5:14b** | 即時與離線翻譯；建議 14B 以上，本機或區域網路 LLM 伺服器 |
+| 翻譯 (LLM) | 自架 LLM 伺服器，預設 **qwen2.5:14b** | 即時與離線翻譯（本機或區域網路 LLM 伺服器）；建議 14B 以上，並**選用不會思考的模型**——程式雖會自動關閉 Ollama 的思考模式，但 gpt-oss 系列架構上必定推理、關不掉，用於即時翻譯會明顯變慢 |
 | 摘要 / 逐字稿校正 (LLM) | 自架 LLM 伺服器，預設 **gpt-oss:120b** | 會議摘要與逐字稿校正；建議 120B 以上，可與翻譯用不同模型 |
 | 翻譯 (離線) | **NLLB 600M** (Meta) | 離線翻譯，支援中日英互譯，僅限本機 |
 | 翻譯 (離線備援) | **Argos Translate** | 完全離線的輕量翻譯模型，僅支援英翻中 |
@@ -619,7 +619,7 @@ WebUI 需要 fastapi、uvicorn、websockets 套件（安裝腳本已自動安裝
 | `--topic TOPIC` | 會議主題（提升翻譯品質，例：`--topic 'ZFS 儲存管理'`）。僅翻譯模式有效 | |
 | `-d`, `--device ID` | 音訊裝置 ID (數字) | 自動偵測 ScreenCaptureKit 或 BlackHole (macOS) / WASAPI Loopback (Windows) |
 | `-e`, `--engine ENGINE` | 翻譯引擎 (llm / argos / nllb) | llm |
-| `--llm-model NAME` | LLM 翻譯模型名稱 | qwen2.5:14b |
+| `--llm-model NAME` | LLM 翻譯模型名稱（建議選用不會思考的模型，見下方說明） | qwen2.5:14b |
 | `--llm-host HOST` | LLM 伺服器位址，自動偵測 Ollama 或 OpenAI 相容 (支援 host:port 格式) | 無（需設定） |
 | `--list-devices` | 列出可用音訊裝置後離開 | |
 | `--record` | 即時模式同時錄製音訊（存入 `recordings/`，預設 MP3） | 不錄製 |
@@ -966,6 +966,8 @@ Moonshine 使用內建 VAD（語音活動偵測）自動斷句，不需要設定
 | 處理間隔等待 | 0~3 秒 | 程式每隔 2~3 秒觸發一次辨識 |
 | 模型推理 | ~2.5 秒 | large-v3-turbo 在 Apple M2 上的處理時間 |
 | LLM 翻譯 | ~0.3-0.8 秒 | qwen2.5:14b 的翻譯時間 |
+
+> **翻譯模型請選用不會思考的模型。** 具思考能力的模型（qwen3 / gemma4 / deepseek-r1 等）在翻譯每一句前都會先產生大量推理內容，即時字幕會慢到無法使用。程式已會自動對 Ollama 關閉思考模式（v2.16.8 起），但 **gpt-oss 系列架構上必定推理、關不掉**，僅適合用於不吃即時性的摘要，不要拿來做即時翻譯。
 
 各場景的預估總延遲（以 large-v3-turbo + LLM 翻譯為例）：
 
