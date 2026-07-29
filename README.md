@@ -306,7 +306,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 #### macOS（macOS 13 以上：授權一次即可，不必安裝驅動）
 
-預設使用系統內建的 **ScreenCaptureKit** 擷取系統音訊：**不需要安裝 BlackHole、不需要建立多重輸出裝置、不需要重開機，Zoom / Teams 的喇叭與麥克風設定也完全不用改**，喇叭或耳機照常出聲。
+**自 v2.17.0 起**，預設使用系統內建的 **ScreenCaptureKit** 擷取系統音訊：**不需要安裝 BlackHole、不需要建立多重輸出裝置、不需要重開機，Zoom / Teams 的喇叭與麥克風設定也完全不用改**，喇叭或耳機照常出聲。
 
 唯一需要做的是授權一次「螢幕錄製」權限：
 

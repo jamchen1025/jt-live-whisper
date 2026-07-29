@@ -143,6 +143,8 @@ macOS 有兩種擷取系統音訊的方式，**預設用第一種，不需要安
 
 #### 2-1. ScreenCaptureKit 系統音訊（預設方式）
 
+> **自 jt-live-whisper v2.17.0 起支援。** v2.16.x 以前的版本 macOS 一律使用 BlackHole，升級後即可改用內建的 ScreenCaptureKit（原有的 BlackHole 設定不必移除，仍可作為備援）。
+
 ScreenCaptureKit 是 macOS 內建的擷取機制，程式直接向系統借一份正在播放的音訊，**你的喇叭或耳機照常出聲、音量鍵照常可用**，Zoom / Teams / Meet 的喇叭與麥克風設定通通不用改。
 
 ```

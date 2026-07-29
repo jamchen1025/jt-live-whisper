@@ -323,6 +323,9 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 也可以用 <code>--audio-source blackhole</code> 強制指定走 BlackHole。</p>
 <hr>
 <h4 id="2-1-screencapturekit-系統音訊預設方式">2-1. ScreenCaptureKit 系統音訊（預設方式）</h4>
+<blockquote>
+<p><strong>自 jt-live-whisper v2.17.0 起支援。</strong> v2.16.x 以前的版本 macOS 一律使用 BlackHole，升級後即可改用內建的 ScreenCaptureKit（原有的 BlackHole 設定不必移除，仍可作為備援）。</p>
+</blockquote>
 <p>ScreenCaptureKit 是 macOS 內建的擷取機制，程式直接向系統借一份正在播放的音訊，<strong>你的喇叭或耳機照常出聲、音量鍵照常可用</strong>，Zoom / Teams / Meet 的喇叭與麥克風設定通通不用改。</p>
 <pre><code>任何應用程式的聲音（Zoom / Teams / Meet / YouTube / Podcast ...）
   │
