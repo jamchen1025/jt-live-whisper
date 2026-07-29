@@ -56,15 +56,25 @@
           <th><span class="zh">說明</span><span class="en">Notes</span></th>
         </tr></thead>
         <tbody>
-          <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>whisper.cpp</strong></td><td><span class="zh">macOS 即時辨識引擎，支援中日英文，可在本機或 GPU 伺服器執行</span><span class="en">macOS live engine; ZH/JA/EN; local or GPU server</span></td></tr>
-          <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>faster-whisper</strong> (CTranslate2)</td><td><span class="zh">Windows 即時辨識 + 全平台離線處理，支援 VAD 靜音過濾</span><span class="en">Windows live + all-platform offline; VAD silence filtering</span></td></tr>
-          <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>mlx-whisper</strong></td><td><span class="zh">Apple Silicon GPU 加速，雙向模式（en_zh / ja_zh）即時辨識專用</span><span class="en">Apple Silicon GPU; for bidirectional live modes</span></td></tr>
+          <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>Whisper</strong> (OpenAI)</td><td><span class="zh">主力辨識模型，支援中日英文；base / small / large-v3-turbo / large-v3 可選</span><span class="en">Main ASR model for ZH/JA/EN; base / small / large-v3-turbo / large-v3</span></td></tr>
+          <tr><td><span class="zh">語音辨識 (台語)</span><span class="en">ASR (Taiwanese)</span></td><td><strong>Breeze-ASR-26</strong> (MediaTek Research)</td><td><span class="zh">台語（台灣閩南語）專用模型，Whisper large-v2 微調，結果直接輸出漢字，不需另外翻譯</span><span class="en">Taiwanese Hokkien model fine-tuned from Whisper large-v2; outputs Han characters directly</span></td></tr>
           <tr><td><span class="zh">語音辨識 (ASR)</span><span class="en">ASR</span></td><td><strong>Moonshine</strong> (Useful Sensors)</td><td><span class="zh">超低延遲串流辨識模型，英文專用（僅限 Apple Silicon）</span><span class="en">Ultra-low-latency streaming, English only (Apple Silicon)</span></td></tr>
-          <tr><td><span class="zh">語音辨識 (台語)</span><span class="en">ASR (Taiwanese)</span></td><td><strong>Breeze-ASR-26</strong> (MediaTek Research)</td><td><span class="zh">台語（台灣閩南語）辨識，Whisper large-v2 微調，結果直接輸出漢字，不需另外翻譯</span><span class="en">Taiwanese Hokkien ASR fine-tuned from Whisper large-v2; outputs Han characters directly</span></td></tr>
           <tr><td><span class="zh">翻譯 / 摘要</span><span class="en">Translate / summary</span></td><td><span class="zh">自架 LLM 伺服器（推薦 <strong>Qwen</strong> / <strong>Phi-4</strong> / <strong>GPT-OSS</strong>）</span><span class="en">Self-hosted LLM (<strong>Qwen</strong> / <strong>Phi-4</strong> / <strong>GPT-OSS</strong>)</span></td><td><span class="zh">透過地端 Ollama 或其他 LLM 伺服器，翻譯建議 14B 以上、摘要建議 120B 以上</span><span class="en">Via local Ollama or other servers; ≥14B for translation, ≥120B for summaries</span></td></tr>
           <tr><td><span class="zh">翻譯 (離線)</span><span class="en">Translate (offline)</span></td><td><strong>NLLB 600M</strong> (Meta)</td><td><span class="zh">離線翻譯，支援中日英互譯（en2zh / zh2en / ja2zh / zh2ja）</span><span class="en">Offline ZH/JA/EN translation</span></td></tr>
           <tr><td><span class="zh">翻譯 (離線備援)</span><span class="en">Translate (fallback)</span></td><td><strong>Argos Translate</strong></td><td><span class="zh">完全離線的輕量翻譯模型，僅支援英翻中</span><span class="en">Fully offline, lightweight; English→Chinese only</span></td></tr>
           <tr><td><span class="zh">講者辨識</span><span class="en">Diarization</span></td><td><strong>resemblyzer</strong> + <strong>spectralcluster</strong></td><td><span class="zh">聲紋特徵提取 + 頻譜分群，可在本機或 GPU 伺服器執行</span><span class="en">Voice embeddings + spectral clustering; local or GPU server</span></td></tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top:26px"><span class="zh">語音辨識的推論引擎</span><span class="en">ASR inference engines</span></h3>
+      <p style="font-size:14px"><span class="zh">同一個模型可以跑在不同引擎上，程式依平台與音訊來源自動選擇，不需手動指定。</span><span class="en">The same model can run on different engines; the app picks one automatically by platform and audio source.</span></p>
+      <table>
+        <thead><tr><th><span class="zh">引擎</span><span class="en">Engine</span></th><th><span class="zh">用途</span><span class="en">Used for</span></th><th><span class="zh">可跑的模型</span><span class="en">Models</span></th></tr></thead>
+        <tbody>
+          <tr><td><strong>whisper.cpp</strong></td><td><span class="zh">macOS 即時辨識（音訊來源為 SDL2 裝置時）</span><span class="en">macOS realtime (SDL2 audio sources)</span></td><td><span class="zh">Whisper 全系列（ggml）</span><span class="en">Whisper family (ggml)</span></td></tr>
+          <tr><td><strong>faster-whisper</strong> (CTranslate2)</td><td><span class="zh">Windows 即時辨識、全平台離線處理、GPU 伺服器</span><span class="en">Windows realtime, offline on all platforms, GPU server</span></td><td><span class="zh">Whisper 全系列、Breeze-ASR-26</span><span class="en">Whisper family, Breeze-ASR-26</span></td></tr>
+          <tr><td><strong>mlx-whisper</strong></td><td><span class="zh">Apple Silicon GPU 加速（即時與台語離線）</span><span class="en">Apple Silicon GPU (realtime and Taiwanese offline)</span></td><td><span class="zh">Whisper 全系列、Breeze-ASR-26</span><span class="en">Whisper family, Breeze-ASR-26</span></td></tr>
+          <tr><td><strong>Moonshine</strong></td><td><span class="zh">英文超低延遲串流</span><span class="en">English ultra-low-latency streaming</span></td><td><span class="zh">Moonshine medium / small / tiny</span><span class="en">Moonshine medium / small / tiny</span></td></tr>
         </tbody>
       </table>
     </div>

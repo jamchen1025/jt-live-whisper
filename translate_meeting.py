@@ -106,12 +106,38 @@ import urllib.request
 import ctranslate2
 import sentencepiece
 
-# OpenCC 簡體→台灣繁體轉換（用於 ASR 辨識結果；LLM 翻譯結果由 prompt 控制，不經 S2TWP）
+# OpenCC 簡體→台灣繁體轉換（用於 ASR 辨識結果）
 try:
     from opencc import OpenCC as _OpenCC
     S2TWP = _OpenCC("s2twp")
+    _T2S = _OpenCC("t2s")
+    _S2T = _OpenCC("s2t")
 except ImportError:
     S2TWP = type("_S2TWProxy", (), {"convert": staticmethod(lambda text: text)})()
+    _T2S = _S2T = None
+
+
+def _looks_simplified(text):
+    """整段判斷文字是否為簡體。
+
+    繁體字轉成簡體後一定會有變化；若「繁→簡」後與原文完全相同，
+    代表原文本來就是簡體。用整段而非逐字判斷，是因為「干」「后」「里」
+    這類簡繁共用字逐字判斷會誤判（例如正確繁體的「干擾」會被當成簡體）。"""
+    if not text or _T2S is None:
+        return False
+    return _T2S.convert(text) == text and _S2T.convert(text) != text
+
+
+def _to_traditional(text):
+    """確保輸出為台灣繁體：偵測到簡體才轉換。
+
+    LLM 翻譯結果原本完全不做轉換（靠 prompt 控制），但模型偶爾仍會吐簡體，
+    出現後沒有任何機制攔得住。這裡改為先偵測：
+    - 已是繁體 → 原樣返回，避免 OpenCC 把正確的「干擾」誤轉成「幹擾」
+    - 確認是簡體 → 套 s2twp，同時取得台灣用語轉換（内存→記憶體、程序→程式）"""
+    if _looks_simplified(text):
+        return S2TWP.convert(text)
+    return text
 
 # Moonshine ASR（選用，未安裝時自動降級為 Whisper only）
 _MOONSHINE_AVAILABLE = False
@@ -1302,7 +1328,7 @@ ASR_ENGINES = [
     ("moonshine", "Moonshine", "真串流，低延遲，僅英文"),
 ]
 
-APP_VERSION = "2.18.0"
+APP_VERSION = "2.18.1"
 
 # faster-whisper 離線辨識參數（含長音檔幻覺防護）— 標準模式
 # - condition_on_previous_text=False：切斷上一段 prompt 傳染，避免一個短句卡住後幻覺自我強化
@@ -2957,7 +2983,8 @@ class OllamaTranslator:
             result = re.sub(r'但遵守指令.*$', '', result).strip()
             # 只取第一行，避免 model 輸出多餘解釋
             result = result.split("\n")[0].strip()
-            # LLM 翻譯不經 S2TWP（prompt 已控制繁體，S2TWP 會誤轉如「干擾→幹擾」）
+            # LLM 翻譯不無條件套 S2TWP（會誤轉如「干擾→幹擾」），
+            # 改由呼叫端用 _to_traditional() 偵測到簡體才轉
             # 過濾翻譯幻覺（模型輸出評論而非翻譯）
             if self._is_hallucinated(text, result):
                 # 先嘗試去除括號評論
@@ -5153,7 +5180,7 @@ def run_stream(capture_id: int, translator, model_name: str, model_path: str,
         result = translator.translate(src_text)
         elapsed = time.monotonic() - t0
         if result:
-            if not isinstance(translator, OllamaTranslator): result = S2TWP.convert(result)
+            result = S2TWP.convert(result) if not isinstance(translator, OllamaTranslator) else _to_traditional(result)
         with _trans_lock:
             _trans_pending[seq] = (src_text, result, elapsed, asr_elapsed)
         _drain_translations(log_path)
@@ -5486,7 +5513,7 @@ def run_stream_moonshine(capture_id: int, translator, moonshine_model_name: str,
         result = translator.translate(src_text)
         elapsed = time.monotonic() - t0
         if result:
-            if not isinstance(translator, OllamaTranslator): result = S2TWP.convert(result)
+            result = S2TWP.convert(result) if not isinstance(translator, OllamaTranslator) else _to_traditional(result)
         with _trans_lock:
             _trans_pending[seq] = (src_text, result, elapsed, asr_elapsed)
         _drain_translations(log_path)
@@ -6082,7 +6109,7 @@ def run_stream_remote(capture_id: int, translator, model_name: str,
         result = translator.translate(src_text)
         elapsed = time.monotonic() - t0
         if result:
-            if not isinstance(translator, OllamaTranslator): result = S2TWP.convert(result)
+            result = S2TWP.convert(result) if not isinstance(translator, OllamaTranslator) else _to_traditional(result)
         with _trans_lock:
             _trans_pending[seq] = (src_text, result, elapsed, asr_elapsed)
         _drain_translations(_log_path)
@@ -6748,7 +6775,7 @@ def run_stream_local_whisper(capture_id: int, translator, model_name: str,
         result = translator.translate(src_text)
         elapsed = time.monotonic() - t0
         if result:
-            if not isinstance(translator, OllamaTranslator): result = S2TWP.convert(result)
+            result = S2TWP.convert(result) if not isinstance(translator, OllamaTranslator) else _to_traditional(result)
         with _trans_lock:
             _trans_pending[seq] = (src_text, result, elapsed, asr_elapsed)
         _drain_translations(_log_path)
@@ -10860,7 +10887,7 @@ def process_audio_file(input_path, mode, translator, model_size="large-v3-turbo"
                     elapsed = time.monotonic() - t0
 
                     if result:
-                        if not isinstance(translator, OllamaTranslator): result = S2TWP.convert(result)
+                        result = S2TWP.convert(result) if not isinstance(translator, OllamaTranslator) else _to_traditional(result)
                         _print_with_badge(
                             f"{dst_color}{BOLD}{ts_tag} {spk_tag_term}[{dst_label}] {result}{RESET}",
                             _speed_badge_color(elapsed), elapsed, "譯")

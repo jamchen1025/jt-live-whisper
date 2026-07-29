@@ -1,4 +1,4 @@
-# jt-live-whisper v2.18.0
+# jt-live-whisper v2.18.1
 
 **100% 全地端 AI 語音工具集**：即時轉錄、即時翻譯、錄音檔批次處理、講者辨識、會議摘要，所有 AI 模型皆在自有設備上執行，資料不經過任何雲端服務。
 
@@ -48,17 +48,26 @@ Author: Jason Cheng (Jason Tools)
 
 | 用途 | AI 模型 | 說明 |
 |------|---------|------|
-| 語音辨識 (ASR) | **whisper.cpp** | macOS 即時辨識引擎，支援中日英文，可在本機或 GPU 伺服器執行 |
-| 語音辨識 (ASR) | **faster-whisper** (CTranslate2) | Windows 即時辨識 + 全平台離線處理，支援 VAD 靜音過濾 |
-| 語音辨識 (ASR) | **mlx-whisper** | Apple Silicon GPU 加速，雙向模式（en_zh / ja_zh）即時辨識專用 |
+| 語音辨識 (ASR) | **Whisper** (OpenAI) | 主力辨識模型，支援中日英文；base / small / large-v3-turbo / large-v3 可選 |
+| 語音辨識 (ASR) | **Breeze-ASR-26** (MediaTek Research) | 台語（台灣閩南語）專用模型，Whisper large-v2 微調，直接輸出漢字 |
 | 語音辨識 (ASR) | **Moonshine** (Useful Sensors) | 超低延遲串流辨識模型，英文專用（僅限 Apple Silicon） |
-| 語音辨識 (ASR) | **Breeze-ASR-26** (MediaTek Research) | 台語（台灣閩南語）辨識，Whisper large-v2 微調，直接輸出漢字 |
 | 翻譯 / 摘要 | 搭配自架 LLM 伺服器使用，推薦 **Qwen** / **Phi-4** / **GPT-OSS** 等模型 | 透過地端 Ollama 或其他 LLM 伺服器執行（本機或區域網路），翻譯建議 14B 以上、摘要建議 120B 以上 |
 | 翻譯 (離線) | **NLLB 600M** (Meta) | 離線翻譯模型，支援中日英互譯（`en2zh`/`zh2en`/`ja2zh`/`zh2ja`） |
 | 翻譯 (離線備援) | **Argos Translate** | 完全離線的輕量翻譯模型，僅支援英翻中 |
 | 講者辨識 | **resemblyzer** + **spectralcluster** | 聲紋特徵提取 + Google 頻譜分群演算法，可在本機或 GPU 伺服器執行 |
 
 所有模型皆在自有設備上推論（本機或區域網路內的 GPU 伺服器），**不需要任何第三方雲端 API**。
+
+**語音辨識的推論引擎**（同一個模型可跑在不同引擎上，程式依平台與音訊來源自動選擇）：
+
+| 引擎 | 用途 | 可跑的模型 |
+|------|------|-----------|
+| **whisper.cpp** | macOS 即時辨識（音訊來源為 SDL2 裝置時） | Whisper 全系列（ggml） |
+| **faster-whisper** (CTranslate2) | Windows 即時辨識、全平台離線處理、GPU 伺服器 | Whisper 全系列、Breeze-ASR-26 |
+| **mlx-whisper** | Apple Silicon GPU 加速（即時與台語離線） | Whisper 全系列、Breeze-ASR-26 |
+| **Moonshine** | 英文超低延遲串流 | Moonshine medium / small / tiny |
+
+
 
 > **為什麼講者辨識不用更精準更快速的 pyannote.audio？** pyannote 的預訓練模型授權限制了可使用的用途與場景，且需要在 HuggingFace 註冊帳號、申請存取權限並設定 Token 才能下載模型。這不符合本工具「零帳號、零註冊、完全地端」的設計理念。resemblyzer + spectralcluster 完全開源、安裝即用、無需任何帳號或 Token。
 
