@@ -202,62 +202,80 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 <tr>
 <th>用途</th>
 <th>AI 模型</th>
-<th>執行位置</th>
+<th>說明</th>
 </tr>
 </thead>
 <tbody><tr>
-<td>語音辨識 (即時)</td>
-<td><strong>whisper.cpp</strong></td>
-<td>本機或 GPU 伺服器</td>
+<td>語音辨識</td>
+<td><strong>Whisper</strong> (OpenAI)</td>
+<td><strong>多語（中日英）</strong> 主力辨識模型；base / small / large-v3-turbo / large-v3 可選</td>
 </tr>
 <tr>
-<td>語音辨識 (即時)</td>
-<td><strong>faster-whisper</strong> (CTranslate2)</td>
-<td>本機（Windows 即時 + 全平台離線）</td>
-</tr>
-<tr>
-<td>語音辨識 (即時)</td>
-<td><strong>mlx-whisper</strong></td>
-<td>僅限 Apple Silicon（雙向模式 GPU 加速）</td>
-</tr>
-<tr>
-<td>語音辨識 (即時)</td>
-<td><strong>Moonshine</strong> (Useful Sensors)</td>
-<td>僅限 Apple Silicon</td>
-</tr>
-<tr>
-<td>語音辨識 (台語)</td>
+<td>語音辨識</td>
 <td><strong>Breeze-ASR-26</strong> (MediaTek Research)</td>
-<td>台語辨識，直接輸出漢字，本機執行</td>
+<td><strong>台語（台灣閩南語）專用</strong>，Whisper large-v2 微調，結果直接輸出漢字，不需另外翻譯</td>
+</tr>
+<tr>
+<td>語音辨識</td>
+<td><strong>Moonshine</strong> (Useful Sensors)</td>
+<td><strong>英文專用</strong>，超低延遲串流辨識模型（僅限 Apple Silicon）</td>
 </tr>
 <tr>
 <td>講者辨識</td>
 <td><strong>resemblyzer</strong> + <strong>spectralcluster</strong></td>
-<td>本機或 GPU 伺服器</td>
+<td>聲紋特徵提取 + 頻譜分群，可在本機或 GPU 伺服器執行</td>
 </tr>
 <tr>
-<td>翻譯 / 摘要</td>
-<td><strong>Qwen 2.5</strong> / <strong>Phi-4</strong> 等 LLM，或搭配使用者自行安裝的模型使用</td>
-<td>本機或區域網路 LLM 伺服器</td>
+<td>翻譯 (LLM)</td>
+<td>自架 LLM 伺服器，預設 <strong>qwen2.5:14b</strong></td>
+<td>即時與離線翻譯；建議 14B 以上，本機或區域網路 LLM 伺服器</td>
+</tr>
+<tr>
+<td>摘要 / 逐字稿校正 (LLM)</td>
+<td>自架 LLM 伺服器，預設 <strong>gpt-oss:120b</strong></td>
+<td>會議摘要與逐字稿校正；建議 120B 以上，可與翻譯用不同模型</td>
 </tr>
 <tr>
 <td>翻譯 (離線)</td>
 <td><strong>NLLB 600M</strong> (Meta)</td>
-<td>僅限本機</td>
+<td>離線翻譯，支援中日英互譯，僅限本機</td>
 </tr>
 <tr>
 <td>翻譯 (離線備援)</td>
 <td><strong>Argos Translate</strong></td>
-<td>僅限本機</td>
+<td>完全離線的輕量翻譯模型，僅支援英翻中</td>
 </tr>
 </tbody></table>
-<p>語音辨識引擎：</p>
-<ul>
-<li><strong>Whisper</strong>（推薦，預設）：高準確度，完整斷句，支援中日英文，可在本機或 GPU 伺服器執行</li>
-<li><strong>Moonshine</strong>（替代，僅英文）：真串流架構，延遲 ~300ms（僅限本機）</li>
-<li><strong>Breeze-ASR-26</strong>（台語專用）：MediaTek Research 以 Whisper large-v2 微調，台語語音直接輸出漢字，<code>nan</code> / <code>nan2en</code> 模式自動使用</li>
-<li><strong>faster-whisper</strong>（離線處理專用）：CTranslate2 引擎，Python API，支援 VAD，可在本機或 GPU 伺服器執行</li>
-</ul>
+<p>語音辨識的推論引擎（同一個模型可跑在不同引擎上，程式依平台與音訊來源自動選擇）：</p>
+<table>
+<thead>
+<tr>
+<th>引擎</th>
+<th>用途</th>
+<th>可跑的模型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>whisper.cpp</strong></td>
+<td>macOS 即時辨識（音訊來源為 SDL2 裝置時），本機或 GPU 伺服器</td>
+<td>Whisper 全系列（ggml）</td>
+</tr>
+<tr>
+<td><strong>faster-whisper</strong> (CTranslate2)</td>
+<td>Windows 即時辨識、全平台離線處理、GPU 伺服器</td>
+<td>Whisper 全系列、Breeze-ASR-26</td>
+</tr>
+<tr>
+<td><strong>mlx-whisper</strong></td>
+<td>Apple Silicon GPU 加速（即時與台語離線）</td>
+<td>Whisper 全系列、Breeze-ASR-26</td>
+</tr>
+<tr>
+<td><strong>Moonshine</strong></td>
+<td>英文超低延遲串流（延遲 ~300ms，僅限本機）</td>
+<td>Moonshine medium / small / tiny</td>
+</tr>
+</tbody></table>
 <p>你仍然可以正常從喇叭或耳機聽到聲音。macOS 13 以上使用系統內建的 ScreenCaptureKit 複製一份音訊給辨識程式（只需授權一次「螢幕錄製」，不必安裝驅動）；macOS 12 以下改用 BlackHole 虛擬音訊裝置；Windows 的 WASAPI Loopback 則直接擷取系統播放的音訊，同樣不需要安裝額外驅動。</p>
 <p><strong>目錄結構：</strong></p>
 <pre><code>jt-live-whisper/

@@ -79,23 +79,25 @@ translate_meeting.py                            remote_whisper_server.py (FastAP
 
 使用的 AI 模型：
 
-| 用途 | AI 模型 | 執行位置 |
-|------|---------|----------|
-| 語音辨識 (即時) | **whisper.cpp** | 本機或 GPU 伺服器 |
-| 語音辨識 (即時) | **faster-whisper** (CTranslate2) | 本機（Windows 即時 + 全平台離線） |
-| 語音辨識 (即時) | **mlx-whisper** | 僅限 Apple Silicon（雙向模式 GPU 加速） |
-| 語音辨識 (即時) | **Moonshine** (Useful Sensors) | 僅限 Apple Silicon |
-| 語音辨識 (台語) | **Breeze-ASR-26** (MediaTek Research) | 台語辨識，直接輸出漢字，本機執行 |
-| 講者辨識 | **resemblyzer** + **spectralcluster** | 本機或 GPU 伺服器 |
-| 翻譯 / 摘要 | **Qwen 2.5** / **Phi-4** 等 LLM，或搭配使用者自行安裝的模型使用 | 本機或區域網路 LLM 伺服器 |
-| 翻譯 (離線) | **NLLB 600M** (Meta) | 僅限本機 |
-| 翻譯 (離線備援) | **Argos Translate** | 僅限本機 |
+| 用途 | AI 模型 | 說明 |
+|------|---------|------|
+| 語音辨識 | **Whisper** (OpenAI) | **多語（中日英）** 主力辨識模型；base / small / large-v3-turbo / large-v3 可選 |
+| 語音辨識 | **Breeze-ASR-26** (MediaTek Research) | **台語（台灣閩南語）專用**，Whisper large-v2 微調，結果直接輸出漢字，不需另外翻譯 |
+| 語音辨識 | **Moonshine** (Useful Sensors) | **英文專用**，超低延遲串流辨識模型（僅限 Apple Silicon） |
+| 講者辨識 | **resemblyzer** + **spectralcluster** | 聲紋特徵提取 + 頻譜分群，可在本機或 GPU 伺服器執行 |
+| 翻譯 (LLM) | 自架 LLM 伺服器，預設 **qwen2.5:14b** | 即時與離線翻譯；建議 14B 以上，本機或區域網路 LLM 伺服器 |
+| 摘要 / 逐字稿校正 (LLM) | 自架 LLM 伺服器，預設 **gpt-oss:120b** | 會議摘要與逐字稿校正；建議 120B 以上，可與翻譯用不同模型 |
+| 翻譯 (離線) | **NLLB 600M** (Meta) | 離線翻譯，支援中日英互譯，僅限本機 |
+| 翻譯 (離線備援) | **Argos Translate** | 完全離線的輕量翻譯模型，僅支援英翻中 |
 
-語音辨識引擎：
-- **Whisper**（推薦，預設）：高準確度，完整斷句，支援中日英文，可在本機或 GPU 伺服器執行
-- **Moonshine**（替代，僅英文）：真串流架構，延遲 ~300ms（僅限本機）
-- **Breeze-ASR-26**（台語專用）：MediaTek Research 以 Whisper large-v2 微調，台語語音直接輸出漢字，`nan` / `nan2en` 模式自動使用
-- **faster-whisper**（離線處理專用）：CTranslate2 引擎，Python API，支援 VAD，可在本機或 GPU 伺服器執行
+語音辨識的推論引擎（同一個模型可跑在不同引擎上，程式依平台與音訊來源自動選擇）：
+
+| 引擎 | 用途 | 可跑的模型 |
+|------|------|-----------|
+| **whisper.cpp** | macOS 即時辨識（音訊來源為 SDL2 裝置時），本機或 GPU 伺服器 | Whisper 全系列（ggml） |
+| **faster-whisper** (CTranslate2) | Windows 即時辨識、全平台離線處理、GPU 伺服器 | Whisper 全系列、Breeze-ASR-26 |
+| **mlx-whisper** | Apple Silicon GPU 加速（即時與台語離線） | Whisper 全系列、Breeze-ASR-26 |
+| **Moonshine** | 英文超低延遲串流（延遲 ~300ms，僅限本機） | Moonshine medium / small / tiny |
 
 你仍然可以正常從喇叭或耳機聽到聲音。macOS 13 以上使用系統內建的 ScreenCaptureKit 複製一份音訊給辨識程式（只需授權一次「螢幕錄製」，不必安裝驅動）；macOS 12 以下改用 BlackHole 虛擬音訊裝置；Windows 的 WASAPI Loopback 則直接擷取系統播放的音訊，同樣不需要安裝額外驅動。
 

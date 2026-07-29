@@ -48,10 +48,11 @@ Author: Jason Cheng (Jason Tools)
 
 | 用途 | AI 模型 | 說明 |
 |------|---------|------|
-| 語音辨識 (ASR) | **Whisper** (OpenAI) | 主力辨識模型，支援中日英文；base / small / large-v3-turbo / large-v3 可選 |
-| 語音辨識 (ASR) | **Breeze-ASR-26** (MediaTek Research) | 台語（台灣閩南語）專用模型，Whisper large-v2 微調，直接輸出漢字 |
-| 語音辨識 (ASR) | **Moonshine** (Useful Sensors) | 超低延遲串流辨識模型，英文專用（僅限 Apple Silicon） |
-| 翻譯 / 摘要 | 搭配自架 LLM 伺服器使用，推薦 **Qwen** / **Phi-4** / **GPT-OSS** 等模型 | 透過地端 Ollama 或其他 LLM 伺服器執行（本機或區域網路），翻譯建議 14B 以上、摘要建議 120B 以上 |
+| 語音辨識 (ASR) | **Whisper** (OpenAI) | **多語（中日英）** 主力辨識模型；base / small / large-v3-turbo / large-v3 可選 |
+| 語音辨識 (ASR) | **Breeze-ASR-26** (MediaTek Research) | **台語（台灣閩南語）專用**，Whisper large-v2 微調，直接輸出漢字 |
+| 語音辨識 (ASR) | **Moonshine** (Useful Sensors) | **英文專用**，超低延遲串流辨識模型（僅限 Apple Silicon） |
+| 翻譯 (LLM) | 自架 LLM 伺服器，預設 **qwen2.5:14b** | 即時與離線翻譯，透過地端 Ollama 或其他 LLM 伺服器執行；建議 14B 以上 |
+| 摘要 / 逐字稿校正 (LLM) | 自架 LLM 伺服器，預設 **gpt-oss:120b** | 會議摘要與逐字稿校正；建議 120B 以上，可與翻譯用不同模型 |
 | 翻譯 (離線) | **NLLB 600M** (Meta) | 離線翻譯模型，支援中日英互譯（`en2zh`/`zh2en`/`ja2zh`/`zh2ja`） |
 | 翻譯 (離線備援) | **Argos Translate** | 完全離線的輕量翻譯模型，僅支援英翻中 |
 | 講者辨識 | **resemblyzer** + **spectralcluster** | 聲紋特徵提取 + Google 頻譜分群演算法，可在本機或 GPU 伺服器執行 |
